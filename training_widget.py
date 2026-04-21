@@ -114,23 +114,22 @@ class HighlightedCodeEditor(QTextEdit):
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.Antialiasing)
         
-        # 获取可见区域的文本块
-        first_block = self.firstVisibleBlock()
-        last_block = first_block
-        
-        # 找到最后一个可见块
-        while last_block.isValid():
-            next_block = last_block.next()
-            if next_block.isValid() and self.blockBoundingGeometry(next_block).top() < self.viewport().height():
-                last_block = next_block
-            else:
-                break
+        # 获取文档中的所有文本块
+        document = self.document()
+        block = document.begin()
         
         # 绘制高亮和引导
-        block = first_block
-        while block.isValid() and block <= last_block:
+        while block.isValid():
             line_number = block.blockNumber()
-            block_rect = self.blockBoundingGeometry(block).translated(self.contentOffset())
+            
+            # 获取该行的矩形区域
+            cursor = QTextCursor(block)
+            rect = self.cursorRect(cursor)
+            
+            # 如果矩形无效（不在可见区域），跳过
+            if not rect.isValid() or rect.height() <= 0:
+                block = block.next()
+                continue
             
             # 如果是引导行，绘制特殊标记
             if line_number == self.current_guide_line:
@@ -139,11 +138,11 @@ class HighlightedCodeEditor(QTextEdit):
                 guide_color = QColor(251, 191, 36, flash_alpha)  # 黄色闪烁
                 painter.setPen(QPen(guide_color, 3))
                 painter.setBrush(QBrush(QColor(251, 191, 36, 50)))
-                painter.drawRect(block_rect.adjusted(-5, 2, 5, -2))
+                painter.drawRect(rect.adjusted(-5, 2, 5, -2))
                 
                 # 绘制箭头指示
-                arrow_x = block_rect.right() + 10
-                arrow_y = block_rect.center().y()
+                arrow_x = rect.right() + 10
+                arrow_y = rect.center().y()
                 painter.setPen(QPen(guide_color, 2))
                 painter.drawLine(arrow_x - 8, arrow_y, arrow_x, arrow_y)
                 painter.drawLine(arrow_x, arrow_y, arrow_x - 5, arrow_y - 5)
@@ -153,7 +152,7 @@ class HighlightedCodeEditor(QTextEdit):
             elif line_number in self.highlighted_lines:
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(QBrush(QColor(16, 185, 129, 40)))  # 半透明绿色
-                painter.drawRect(block_rect.adjusted(-5, 2, 5, -2))
+                painter.drawRect(rect.adjusted(-5, 2, 5, -2))
             
             block = block.next()
         
