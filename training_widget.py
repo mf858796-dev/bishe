@@ -13,26 +13,14 @@ class GazePointWidget(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents)  # 不阻挡鼠标事件
         self.setAttribute(Qt.WA_NoSystemBackground)  # 无背景
         self.setStyleSheet("background-color: transparent;")  # 完全透明
-        self.gaze_points = []  # 存储注视点 [(x, y, timestamp)]
-        self.max_points = 20  # 最多显示的点数
-        self.point_lifetime = 2.0  # 每个点存活时间(秒)
+        self.current_gaze_point = None  # 只存储当前注视点 (x, y, timestamp)
         self.last_update_time = 0  # 上次更新时间
         self.update_interval = 0.05  # 最小更新间隔50ms（20fps）
         
     def add_gaze_point(self, x, y):
-        """添加新的注视点"""
+        """添加新的注视点（替换旧的）"""
         current_time = time.time()
-        self.gaze_points.append((x, y, current_time))
-        
-        # 清理过期的点
-        self.gaze_points = [
-            (px, py, pt) for px, py, pt in self.gaze_points 
-            if current_time - pt < self.point_lifetime
-        ]
-        
-        # 限制最大点数
-        if len(self.gaze_points) > self.max_points:
-            self.gaze_points = self.gaze_points[-self.max_points:]
+        self.current_gaze_point = (x, y, current_time)
         
         # 限制重绘频率，避免过度刷新
         if current_time - self.last_update_time >= self.update_interval:
@@ -40,40 +28,39 @@ class GazePointWidget(QWidget):
             self.last_update_time = current_time
     
     def clear_points(self):
-        """清除所有注视点"""
-        self.gaze_points.clear()
+        """清除注视点"""
+        self.current_gaze_point = None
         self.update()
     
     def paintEvent(self, event):
         """绘制注视点"""
+        if not self.current_gaze_point:
+            return
+            
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        current_time = time.time()
+        x, y, timestamp = self.current_gaze_point
         
-        for i, (x, y, timestamp) in enumerate(self.gaze_points):
-            # 计算透明度(越老的点越透明)
-            age = current_time - timestamp
-            alpha = int(255 * (1 - age / self.point_lifetime))
-            
-            # 计算大小(越新的点越大)
-            size = 8 + int(4 * (1 - age / self.point_lifetime))
-            
-            # 设置颜色(红色渐变)
-            color = QColor(255, 50, 50, alpha)
-            
-            # 绘制外圈
-            pen = QPen(color)
-            pen.setWidth(2)
-            painter.setPen(pen)
-            painter.setBrush(QBrush(color))
-            painter.drawEllipse(QPointF(x, y), size, size)
-            
-            # 绘制中心点
-            center_color = QColor(255, 255, 255, alpha)
-            painter.setPen(QPen(center_color))
-            painter.setBrush(QBrush(center_color))
-            painter.drawEllipse(QPointF(x, y), 3, 3)
+        # 检查注视点是否过期（超过2秒不更新）
+        current_time = time.time()
+        if current_time - timestamp > 2.0:
+            self.current_gaze_point = None
+            return
+        
+        # 绘制外圈（红色）
+        color = QColor(255, 50, 50, 255)
+        pen = QPen(color)
+        pen.setWidth(2)
+        painter.setPen(pen)
+        painter.setBrush(QBrush(color))
+        painter.drawEllipse(QPointF(x, y), 10, 10)
+        
+        # 绘制中心点（白色）
+        center_color = QColor(255, 255, 255, 255)
+        painter.setPen(QPen(center_color))
+        painter.setBrush(QBrush(center_color))
+        painter.drawEllipse(QPointF(x, y), 4, 4)
 
 
 class HighlightedCodeEditor(QTextEdit):

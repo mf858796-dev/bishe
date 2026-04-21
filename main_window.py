@@ -1041,6 +1041,34 @@ class MainWindow(QMainWindow):
         ui_group.setLayout(ui_layout)
         layout.addWidget(ui_group)
         
+        # 模拟器设置
+        sim_group = QGroupBox("模拟器模式")
+        sim_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                color: #10b981;
+                border: 2px solid #e2e8f0;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+        """)
+        sim_layout = QVBoxLayout()
+        
+        self.simulator_check = QCheckBox("启用模拟器模式（无眼动仪时使用）")
+        self.simulator_check.setChecked(False)
+        self.simulator_check.setStyleSheet("font-size: 14px; padding: 8px;")
+        self.simulator_check.toggled.connect(self.toggle_simulator_mode)
+        sim_layout.addWidget(self.simulator_check)
+        
+        sim_desc = QLabel(" 开启后，可以使用鼠标移动模拟眼动数据，适合在没有眼动仪的情况下测试系统功能。")
+        sim_desc.setStyleSheet("color: #64748b; font-size: 12px; padding: 8px;")
+        sim_desc.setWordWrap(True)
+        sim_layout.addWidget(sim_desc)
+        
+        sim_group.setLayout(sim_layout)
+        layout.addWidget(sim_group)
+        
         # 保存设置按钮
         save_settings_btn = QPushButton("💾 保存设置")
         save_settings_btn.setFont(QFont("Microsoft YaHei", 13, QFont.Bold))
@@ -1199,33 +1227,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         layout.addStretch()
         
-        # 模拟器模式开关
-        self.simulator_check = QCheckBox("🎮 模拟器模式 (无眼动仪时使用)")
-        self.simulator_check.setStyleSheet("""
-            QCheckBox {
-                color: white;
-                font-size: 13px;
-                font-weight: bold;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 9px;
-                border: 2px solid white;
-                background-color: rgba(255, 255, 255, 0.3);
-            }
-            QCheckBox::indicator:checked {
-                background-color: #10b981;
-                border: 2px solid #10b981;
-            }
-        """)
-        self.simulator_check.setChecked(False)
-        self.simulator_check.toggled.connect(self.toggle_simulator_mode)
-        layout.addWidget(self.simulator_check)
-        
         # 版本标签
-        version = QLabel("v2.0")
+        version = QLabel("v3.0")
         version.setStyleSheet("color: rgba(255,255,255,0.8); font-size: 14px;")
         layout.addWidget(version)
         
@@ -1361,7 +1364,7 @@ class MainWindow(QMainWindow):
             except:
                 pass
     
-    def toggle_simulator_mode(self, checked):
+    def toggle_simulator_mode(self, checked, show_message=True):
         """切换模拟器模式"""
         self.simulator_mode = checked
         
@@ -1371,13 +1374,14 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'training_widget'):
                 self.training_widget.code_editor.setMouseTracking(True)
                 self.training_widget.code_editor.viewport().installEventFilter(self)
-            QMessageBox.information(
-                self,
-                "🎮 模拟器模式已启用",
-                "现在可以使用鼠标模拟眼动数据。\n\n"
-                "在训练任务中移动鼠标，系统将记录鼠标位置作为注视点。\n\n"
-                "这适合在没有眼动仪的情况下测试系统功能。"
-            )
+            if show_message:
+                QMessageBox.information(
+                    self,
+                    "🎮 模拟器模式已启用",
+                    "现在可以使用鼠标模拟眼动数据。\n\n"
+                    "在训练任务中移动鼠标，系统将记录鼠标位置作为注视点。\n\n"
+                    "这适合在没有眼动仪的情况下测试系统功能。"
+                )
         else:
             # 禁用鼠标追踪
             self.setMouseTracking(False)
@@ -1407,13 +1411,14 @@ class MainWindow(QMainWindow):
                 dt = current_time - self.last_time
                 self.last_time = current_time
                 
-                # 调用训练模块的check_gaze
+                # 调用训练模块的check_gaze（这会更新训练模块内部的注视点）
                 self.training_widget.check_gaze(x, y, dt)
                 
-                # 同时更新主窗口的注视点显示
-                screen_pos = self.training_widget.code_editor.viewport().mapToGlobal(pos)
-                main_pos = self.mapFromGlobal(screen_pos)
-                self.on_gaze_mapped(main_pos.x(), main_pos.y())
+                # 注释掉全局注视点更新，避免重复显示
+                # 训练模块已经在内部显示注视点了
+                # screen_pos = self.training_widget.code_editor.viewport().mapToGlobal(pos)
+                # main_pos = self.mapFromGlobal(screen_pos)
+                # self.on_gaze_mapped(main_pos.x(), main_pos.y())
         
         return super().eventFilter(obj, event)
     
@@ -1671,9 +1676,10 @@ class MainWindow(QMainWindow):
     def on_task_completed(self, msg):
         """任务完成处理"""
         # 生成报告
-        if self.current_task:
-            self.report_generator.generate_heatmap(f"level_{self.current_task.level}_heatmap.png")
-            self.report_generator.generate_trajectory(f"level_{self.current_task.level}_trajectory.png")
+        if hasattr(self, 'training_widget') and self.training_widget.current_task:
+            level = self.training_widget.current_task.level
+            self.report_generator.generate_heatmap(f"level_{level}_heatmap.png")
+            self.report_generator.generate_trajectory(f"level_{level}_trajectory.png")
         
         # 记录训练历史
         self.record_training_completion(msg)
@@ -2846,6 +2852,7 @@ class MainWindow(QMainWindow):
         self.settings['font_size'] = self.font_size_spin.value()
         self.settings['show_gaze_point'] = self.show_gaze_point_check.isChecked()
         self.settings['show_heatmap'] = self.show_heatmap_check.isChecked()
+        self.settings['simulator_mode'] = self.simulator_check.isChecked()
         
         # 保存
         if self.save_settings():
@@ -3351,7 +3358,8 @@ class MainWindow(QMainWindow):
             'theme': '浅色主题',
             'font_size': 12,
             'show_gaze_point': True,
-            'show_heatmap': True
+            'show_heatmap': True,
+            'simulator_mode': False
         }
         
         if os.path.exists(self.settings_file):
@@ -3401,6 +3409,10 @@ class MainWindow(QMainWindow):
             self.show_gaze_point_check.setChecked(self.settings.get('show_gaze_point', True))
         if hasattr(self, 'show_heatmap_check'):
             self.show_heatmap_check.setChecked(self.settings.get('show_heatmap', True))
+        if hasattr(self, 'simulator_check'):
+            self.simulator_check.setChecked(self.settings.get('simulator_mode', False))
+            # 应用模拟器模式状态（不显示提示框）
+            self.toggle_simulator_mode(self.settings.get('simulator_mode', False), show_message=False)
     
     def resizeEvent(self, event):
         """窗口大小改变时，调整全局注视点组件的大小"""
