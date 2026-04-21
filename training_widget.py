@@ -854,7 +854,7 @@ print(process_data(data))""",
                 self.update_step_instruction()
     
     def check_gaze(self, x, y, dt):
-        """检查视线位置并更新训练状态"""
+        """检查视线位置并更新训练状态（只记录位置，不累加时间）"""
         # 严格检查:必须正在训练且有当前任务
         if not self.is_training or not self.current_task:
             return
@@ -905,31 +905,6 @@ print(process_data(data))""",
         self.gaze_y = y
         self.total_fixations += 1
         
-        # 计算目标区域（复用上面的结果）
-        tx = 0
-        ty = block_top
-        tw = viewport.width()
-        th = block_bottom - block_top
-        
-        # 检查是否在目标区域内
-        if tx <= x <= tx + tw and ty <= y <= ty + th:
-            current_block.dwell_time += dt
-            self.valid_fixations += 1
-            
-            # 检查是否完成当前块
-            if current_block.dwell_time >= current_block.required_time:
-                current_block.completed = True
-                self.last_block_index = self.current_task.current_block_index
-                self.current_task.current_block_index += 1
-                
-                # 检查是否完成所有步骤
-                if self.current_task.current_block_index >= len(self.current_task.blocks):
-                    self.complete_task()
-                else:
-                    self.highlight_current_block()
-            
-            self.update_step_instruction()
-        
         # 降低统计更新频率，每10次调用更新一次
         if not hasattr(self, '_stats_counter'):
             self._stats_counter = 0
@@ -937,20 +912,79 @@ print(process_data(data))""",
         if self._stats_counter % 10 == 0:
             self.update_stats()
     
-    def update_stats(self):
-        """更新统计信息（包括持续检查注视点）"""
-        if not self.current_task:
+    def _check_and_accumulate_gaze(self, x, y, dt):
+        """
+        检查注视点是否在目标区域内并累计时间
+        :param x: viewport X 坐标
+        :param y: viewport Y 坐标
+        :param dt: 时间间隔（秒）
+        """
+        if not self.current_task or not self.is_training:
             return
         
-        # 只在训练时检查注视点累计
-        if self.is_training and hasattr(self, 'last_gaze_x') and hasattr(self, 'last_gaze_y'):
+        current_block = self.current_task.blocks[self.current_task.current_block_index]
+        
+        # 获取当前代码块在 viewport 中的坐标（只计算一次）
+        cursor = self.code_editor.textCursor()
+        cursor.movePosition(cursor.Start)
+        cursor.movePosition(cursor.Down, n=current_block.start_line - 1)
+        start_rect = self.code_editor.cursorRect(cursor)
+        cursor.movePosition(cursor.Down, n=current_block.end_line - current_block.start_line)
+        end_rect = self.code_editor.cursorRect(cursor)
+        
+        tx = 0
+        ty = start_rect.y()
+        tw = self.code_editor.viewport().width()
+        th = end_rect.bottom() - start_rect.top()
+        
+        # 检查是否在目标区域内
+        if tx <= x <= tx + tw and ty <= y <= ty + th:
+            current_block.dwell_time += dt
+            self.valid_fixations += 1
+            
+            # 增加连击数
+            self.combo_count += 1
+            if self.combo_count > self.max_combo:
+                self.max_combo = self.combo_count
+            
+            # 计算得分（基础分 + 连击奖励）
+            base_score = dt * 10
+            combo_bonus = min(self.combo_count * 2, 20)
+            self.score += int(base_score + combo_bonus)
+            
+            # 检查是否完成当前块
+            if current_block.dwell_time >= current_block.required_time:
+                current_block.completed = True
+                self.score += 50
+                self.combo_count = 0
+                self.last_block_index = self.current_task.current_block_index
+                self.current_task.current_block_index += 1
+                
+                if self.current_task.current_block_index >= len(self.current_task.blocks):
+                    self.complete_task()
+                else:
+                    self.highlight_current_block()
+            
+            # 降低更新频率
+            if not hasattr(self, '_instruction_counter'):
+                self._instruction_counter = 0
+            self._instruction_counter += 1
+            if self._instruction_counter % 5 == 0:
+                self.update_step_instruction()
+    
+    def update_stats(self):
+        """更新统计信息 + 累加注视时间（核心入口）"""
+        if not self.current_task or not self.is_training:
+            return
+        
+        # 关键：如果有保存的注视点，累加时间
+        if hasattr(self, 'last_gaze_x') and hasattr(self, 'last_gaze_y'):
             if self.last_gaze_time > 0:
                 current_time = time.time()
                 dt = current_time - self.last_gaze_time
-                
-                # 只有当距离上次更新超过0.2秒时才处理（降低频率）
-                if dt >= 0.2:
-                    self._check_and_accumulate_gaze(self.last_gaze_x, self.last_gaze_y, dt)
+                # 只要超过0.1秒就累加（兼容鼠标快速移动的情况）
+                if dt >= 0.1:
+                    self._check_and_accumulate_gaze(self.last_gaze_x, self.last_gaze_y, min(dt, 1.0))
                     self.last_gaze_time = current_time
         
         elapsed = time.time() - self.current_task.start_time if self.current_task.start_time else 0
