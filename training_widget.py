@@ -1,9 +1,10 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QTextEdit, QProgressBar, QPushButton, QGroupBox,
-                             QScrollArea, QFrame)
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPointF
-from PyQt5.QtGui import QFont, QColor, QPalette, QTextCharFormat, QTextCursor, QPainter, QPen, QBrush
+                             QScrollArea, QFrame, QMessageBox)
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPointF, QRectF
+from PyQt5.QtGui import QFont, QColor, QPalette, QTextCharFormat, QTextCursor, QPainter, QPen, QBrush, QTextBlockUserData
 import time
+import math
 
 class GazePointWidget(QWidget):
     """注视点显示组件"""
@@ -73,6 +74,90 @@ class GazePointWidget(QWidget):
             painter.setPen(QPen(center_color))
             painter.setBrush(QBrush(center_color))
             painter.drawEllipse(QPointF(x, y), 3, 3)
+
+
+class HighlightedCodeEditor(QTextEdit):
+    """支持行高亮和视觉引导的代码编辑器"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.highlighted_lines = set()  # 需要高亮的行号
+        self.current_guide_line = -1  # 当前引导的行号
+        self.gaze_dwell_times = {}  # 每行的注视停留时间 {line_number: total_time}
+        self.last_gaze_line = -1  # 上次注视的行号
+        self.last_gaze_time = time.time()  # 上次注视时间
+        
+    def set_highlighted_lines(self, line_numbers):
+        """设置需要高亮的行号集合"""
+        self.highlighted_lines = set(line_numbers)
+        self.viewport().update()
+    
+    def set_guide_line(self, line_number):
+        """设置引导行（下一步该看的行）"""
+        self.current_guide_line = line_number
+        self.viewport().update()
+    
+    def update_gaze_dwell(self, line_number, dt):
+        """更新某行的注视停留时间"""
+        if line_number not in self.gaze_dwell_times:
+            self.gaze_dwell_times[line_number] = 0
+        self.gaze_dwell_times[line_number] += dt
+    
+    def get_line_at_position(self, y_pos):
+        """根据Y坐标获取行号"""
+        cursor = self.cursorForPosition(QPointF(0, y_pos).toPoint())
+        return cursor.blockNumber()
+    
+    def paintEvent(self, event):
+        """重写绘制事件，添加行高亮和引导标记"""
+        super().paintEvent(event)
+        
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # 获取可见区域的文本块
+        first_block = self.firstVisibleBlock()
+        last_block = first_block
+        
+        # 找到最后一个可见块
+        while last_block.isValid():
+            next_block = last_block.next()
+            if next_block.isValid() and self.blockBoundingGeometry(next_block).top() < self.viewport().height():
+                last_block = next_block
+            else:
+                break
+        
+        # 绘制高亮和引导
+        block = first_block
+        while block.isValid() and block <= last_block:
+            line_number = block.blockNumber()
+            block_rect = self.blockBoundingGeometry(block).translated(self.contentOffset())
+            
+            # 如果是引导行，绘制特殊标记
+            if line_number == self.current_guide_line:
+                # 绘制闪烁的边框
+                flash_alpha = int(128 + 127 * math.sin(time.time() * 4))
+                guide_color = QColor(251, 191, 36, flash_alpha)  # 黄色闪烁
+                painter.setPen(QPen(guide_color, 3))
+                painter.setBrush(QBrush(QColor(251, 191, 36, 50)))
+                painter.drawRect(block_rect.adjusted(-5, 2, 5, -2))
+                
+                # 绘制箭头指示
+                arrow_x = block_rect.right() + 10
+                arrow_y = block_rect.center().y()
+                painter.setPen(QPen(guide_color, 2))
+                painter.drawLine(arrow_x - 8, arrow_y, arrow_x, arrow_y)
+                painter.drawLine(arrow_x, arrow_y, arrow_x - 5, arrow_y - 5)
+                painter.drawLine(arrow_x, arrow_y, arrow_x - 5, arrow_y + 5)
+            
+            # 如果是已完成的高亮行，绘制绿色背景
+            elif line_number in self.highlighted_lines:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(QColor(16, 185, 129, 40)))  # 半透明绿色
+                painter.drawRect(block_rect.adjusted(-5, 2, 5, -2))
+            
+            block = block.next()
+        
+        painter.end()
 
 class CodeBlock:
     """代码块定义"""
@@ -221,8 +306,8 @@ class TrainingWidget(QWidget):
         layout = QVBoxLayout(group)
         layout.setContentsMargins(8, 8, 8, 8)
         
-        # 代码编辑器
-        self.code_editor = QTextEdit()
+        # 使用增强版代码编辑器
+        self.code_editor = HighlightedCodeEditor()
         self.code_editor.setFont(QFont("Consolas", 13))
         self.code_editor.setReadOnly(True)
         

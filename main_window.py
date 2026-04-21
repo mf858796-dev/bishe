@@ -447,6 +447,7 @@ class MainWindow(QMainWindow):
         self.is_connected = False
         self.gaze_count = 0
         self._last_rate_update = time.time()  # 用于计算数据接收率
+        self.simulator_mode = False  # 模拟器模式标志
         
         # 数据文件路径
         self.data_dir = os.path.join(os.path.dirname(__file__), 'data')
@@ -1198,6 +1199,31 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         layout.addStretch()
         
+        # 模拟器模式开关
+        self.simulator_check = QCheckBox("🎮 模拟器模式 (无眼动仪时使用)")
+        self.simulator_check.setStyleSheet("""
+            QCheckBox {
+                color: white;
+                font-size: 13px;
+                font-weight: bold;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                border: 2px solid white;
+                background-color: rgba(255, 255, 255, 0.3);
+            }
+            QCheckBox::indicator:checked {
+                background-color: #10b981;
+                border: 2px solid #10b981;
+            }
+        """)
+        self.simulator_check.setChecked(False)
+        self.simulator_check.toggled.connect(self.toggle_simulator_mode)
+        layout.addWidget(self.simulator_check)
+        
         # 版本标签
         version = QLabel("v2.0")
         version.setStyleSheet("color: rgba(255,255,255,0.8); font-size: 14px;")
@@ -1334,6 +1360,62 @@ class MainWindow(QMainWindow):
                     self.battery_label.setText(f"🔋 电量: {battery}%")
             except:
                 pass
+    
+    def toggle_simulator_mode(self, checked):
+        """切换模拟器模式"""
+        self.simulator_mode = checked
+        
+        if checked:
+            # 启用鼠标追踪
+            self.setMouseTracking(True)
+            if hasattr(self, 'training_widget'):
+                self.training_widget.code_editor.setMouseTracking(True)
+                self.training_widget.code_editor.viewport().installEventFilter(self)
+            QMessageBox.information(
+                self,
+                "🎮 模拟器模式已启用",
+                "现在可以使用鼠标模拟眼动数据。\n\n"
+                "在训练任务中移动鼠标，系统将记录鼠标位置作为注视点。\n\n"
+                "这适合在没有眼动仪的情况下测试系统功能。"
+            )
+        else:
+            # 禁用鼠标追踪
+            self.setMouseTracking(False)
+            if hasattr(self, 'training_widget'):
+                self.training_widget.code_editor.setMouseTracking(False)
+                self.training_widget.code_editor.viewport().removeEventFilter(self)
+    
+    def eventFilter(self, obj, event):
+        """事件过滤器 - 捕获鼠标移动事件（模拟器模式）"""
+        from PyQt5.QtCore import QEvent
+        
+        if not self.simulator_mode:
+            return super().eventFilter(obj, event)
+        
+        # 检查是否是训练模块的viewport
+        if (hasattr(self, 'training_widget') and 
+            obj == self.training_widget.code_editor.viewport() and
+            event.type() == QEvent.MouseMove):
+            
+            if self.training_widget.is_training:
+                # 获取鼠标相对于 viewport 的位置
+                pos = event.pos()
+                x, y = pos.x(), pos.y()
+                
+                # 计算时间间隔
+                current_time = time.time()
+                dt = current_time - self.last_time
+                self.last_time = current_time
+                
+                # 调用训练模块的check_gaze
+                self.training_widget.check_gaze(x, y, dt)
+                
+                # 同时更新主窗口的注视点显示
+                screen_pos = self.training_widget.code_editor.viewport().mapToGlobal(pos)
+                main_pos = self.mapFromGlobal(screen_pos)
+                self.on_gaze_mapped(main_pos.x(), main_pos.y())
+        
+        return super().eventFilter(obj, event)
     
     def handle_connect(self):
         self.connect_btn.setEnabled(False)
