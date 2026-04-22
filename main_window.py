@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import time
+import sqlite3
 from datetime import datetime
 
 # 设置 Qt 平台插件路径
@@ -26,6 +27,7 @@ from coordinate_mapper import CoordinateMapper
 from attention_model import AttentionEvaluator
 from training_widget import TrainingWidget
 from report_generator import ReportGenerator
+from database import DatabaseManager
 import time
 from collections import deque
 
@@ -306,6 +308,9 @@ class GazeHeatmapWidget(QFrame):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.db = DatabaseManager()
+        self.current_user_id = 1
+        self.current_username = "Guest"
         self.setWindowTitle("编程初学者代码阅读专注力训练系统")
         
         # 根据屏幕分辨率自动调整窗口大小
@@ -332,6 +337,10 @@ class MainWindow(QMainWindow):
         self.mapper = CoordinateMapper()
         self.evaluator = AttentionEvaluator()
         self.training_widget = TrainingWidget()
+        
+        # 将登录的用户 ID 传递给训练模块
+        self.training_widget.current_user_id = self.current_user_id
+        
         self.report_generator = ReportGenerator()
         self.training_widget.task_completed.connect(self.on_task_completed)
         
@@ -348,6 +357,13 @@ class MainWindow(QMainWindow):
         
         # 眼镜滑动检测相关变量
         self.gaze_error_history = []  # 注视误差历史
+    
+    def set_current_user(self, user_id, username):
+        """设置当前登录用户"""
+        self.current_user_id = user_id
+        self.current_username = username
+        self.training_widget.current_user_id = user_id
+        self.setWindowTitle(f"编程初学者代码阅读专注力训练系统 - 用户: {username}")
         self.center_gaze_samples = []  # 中心区域注视样本（用于隐式校准）
         self.last_calibration_check_time = time.time()  # 上次校准检查时间
         
@@ -413,6 +429,11 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(settings_tab, "⚙️ 系统设置")
         
         main_layout.addWidget(self.tab_widget, stretch=1)  # 让标签页占据所有可用空间
+        
+        # 从数据库加载用户信息到 UI 输入框（UI 初始化完成后）
+        self.load_user_info_from_db()
+        # 更新训练统计摘要
+        self.update_summary_from_db()
         
         # 连接按钮
         self.connect_btn = self.create_connect_button()
@@ -698,111 +719,125 @@ class MainWindow(QMainWindow):
         
         user_widget = QWidget()
         layout = QVBoxLayout(user_widget)
-        layout.setContentsMargins(12, 8, 12, 8)  # 进一步减少外边距
-        layout.setSpacing(10)  # 进一步减少间距
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(16)
         
         # 用户信息卡片
         info_group = QGroupBox("👤 当前用户信息")
         info_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
-                font-size: 14px;
+                font-size: 16px;
                 color: #3b82f6;
                 border: 2px solid #e2e8f0;
-                border-radius: 8px;
-                margin-top: 8px;
-                padding-top: 10px;
+                border-radius: 12px;
+                margin-top: 12px;
+                padding-top: 16px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
+                left: 16px;
+                padding: 0 8px;
             }
         """)
         info_layout = QFormLayout()
-        info_layout.setSpacing(8)
-        info_layout.setContentsMargins(12, 8, 12, 10)
-        info_layout.setLabelAlignment(Qt.AlignRight)  # 标签右对齐
+        info_layout.setSpacing(12)
+        info_layout.setContentsMargins(20, 16, 20, 16)
+        info_layout.setLabelAlignment(Qt.AlignRight)
+        info_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         
         self.user_name_input = QLineEdit()
         self.user_name_input.setPlaceholderText("请输入姓名")
-        self.user_name_input.setMinimumHeight(32)
-        self.user_name_input.setMaximumHeight(32)
+        self.user_name_input.setMinimumHeight(48)
         self.user_name_input.setStyleSheet("""
             QLineEdit {
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 6px 10px;
-                font-size: 13px;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 12px 16px;
+                font-size: 14px;
+                background: #f9fafb;
             }
             QLineEdit:focus {
                 border: 1px solid #3b82f6;
+                background: white;
             }
         """)
-        info_layout.addRow("姓名:", self.user_name_input)
+        lbl_name = QLabel("姓名")
+        lbl_name.setStyleSheet("font-size: 14px; font-weight: bold; color: #374151;")
+        info_layout.addRow(lbl_name, self.user_name_input)
         
         self.user_id_input = QLineEdit()
         self.user_id_input.setPlaceholderText("请输入学号/工号")
-        self.user_id_input.setMinimumHeight(32)
-        self.user_id_input.setMaximumHeight(32)
+        self.user_id_input.setMinimumHeight(48)
         self.user_id_input.setStyleSheet("""
             QLineEdit {
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 6px 10px;
-                font-size: 13px;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 12px 16px;
+                font-size: 14px;
+                background: #f9fafb;
             }
             QLineEdit:focus {
                 border: 1px solid #3b82f6;
+                background: white;
             }
         """)
-        info_layout.addRow("学号/工号:", self.user_id_input)
+        lbl_id = QLabel("学号/工号")
+        lbl_id.setStyleSheet("font-size: 14px; font-weight: bold; color: #374151;")
+        info_layout.addRow(lbl_id, self.user_id_input)
         
         self.user_level_combo = QComboBox()
         self.user_level_combo.addItems(["初级", "中级", "高级"])
-        self.user_level_combo.setMinimumHeight(32)
-        self.user_level_combo.setMaximumHeight(32)
+        self.user_level_combo.setMinimumHeight(48)
         self.user_level_combo.setStyleSheet("""
             QComboBox {
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 6px 10px;
-                font-size: 13px;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 12px 16px;
+                font-size: 14px;
+                background: #f9fafb;
             }
             QComboBox:focus {
                 border: 1px solid #3b82f6;
+                background: white;
             }
         """)
-        info_layout.addRow("编程水平:", self.user_level_combo)
+        lbl_level = QLabel("编程水平")
+        lbl_level.setStyleSheet("font-size: 14px; font-weight: bold; color: #374151;")
+        info_layout.addRow(lbl_level, self.user_level_combo)
         
         self.user_experience_spin = QSpinBox()
         self.user_experience_spin.setRange(0, 120)
         self.user_experience_spin.setValue(0)
         self.user_experience_spin.setSuffix(" 个月")
-        self.user_experience_spin.setMinimumHeight(32)
-        self.user_experience_spin.setMaximumHeight(32)
+        self.user_experience_spin.setMinimumHeight(48)
         self.user_experience_spin.setStyleSheet("""
             QSpinBox {
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 6px 10px;
-                font-size: 13px;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 12px 16px;
+                font-size: 14px;
+                background: #f9fafb;
             }
             QSpinBox:focus {
                 border: 1px solid #3b82f6;
+                background: white;
             }
         """)
-        info_layout.addRow("编程经验:", self.user_experience_spin)
+        lbl_exp = QLabel("编程经验")
+        lbl_exp.setStyleSheet("font-size: 14px; font-weight: bold; color: #374151;")
+        info_layout.addRow(lbl_exp, self.user_experience_spin)
         
         save_user_btn = QPushButton("💾 保存用户信息")
-        save_user_btn.setFont(QFont("Microsoft YaHei", 13, QFont.Bold))
-        save_user_btn.setMinimumHeight(50)
+        save_user_btn.setFont(QFont("Microsoft YaHei", 14, QFont.Bold))
+        save_user_btn.setMinimumHeight(56)
         save_user_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3b82f6;
                 color: white;
                 border-radius: 8px;
-                padding: 12px;
+                padding: 14px;
+                margin-top: 12px;
             }
             QPushButton:hover {
                 background-color: #2563eb;
@@ -812,7 +847,7 @@ class MainWindow(QMainWindow):
             }
         """)
         save_user_btn.clicked.connect(self.save_user_info)
-        info_layout.addWidget(save_user_btn)
+        info_layout.addRow(save_user_btn)
         
         info_group.setLayout(info_layout)
         layout.addWidget(info_group)
@@ -928,142 +963,91 @@ class MainWindow(QMainWindow):
     
     def create_settings_tab(self):
         """创建系统设置标签页"""
-        # 使用滚动区域，防止内容被压缩
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setStyleSheet("background-color: transparent; border: none;")
         
         settings_widget = QWidget()
         layout = QVBoxLayout(settings_widget)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
         
         # 眼动仪设置
         glasses_group = QGroupBox("眼动仪设置")
-        glasses_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                color: #8b5cf6;
-                border: 2px solid #e2e8f0;
-                border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-        """)
         glasses_layout = QFormLayout()
+        glasses_layout.setContentsMargins(15, 15, 15, 15)
+        glasses_layout.setSpacing(10)
+        glasses_layout.setLabelAlignment(Qt.AlignRight)
         
         self.rtsp_timeout_spin = QSpinBox()
         self.rtsp_timeout_spin.setRange(5, 60)
         self.rtsp_timeout_spin.setValue(15)
         self.rtsp_timeout_spin.setSuffix(" 秒")
-        self.rtsp_timeout_spin.setStyleSheet("""
-            QSpinBox {
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 14px;
-            }
-        """)
+        self.rtsp_timeout_spin.setMinimumHeight(28)
         glasses_layout.addRow("RTSP超时时间:", self.rtsp_timeout_spin)
         
         self.gaze_sample_rate_combo = QComboBox()
         self.gaze_sample_rate_combo.addItems(["50 Hz", "100 Hz", "200 Hz"])
-        self.gaze_sample_rate_combo.setCurrentIndex(1)  # 默认100Hz
-        self.gaze_sample_rate_combo.setStyleSheet("""
-            QComboBox {
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 14px;
-            }
-        """)
+        self.gaze_sample_rate_combo.setCurrentIndex(1)
+        self.gaze_sample_rate_combo.setMinimumHeight(28)
         glasses_layout.addRow("采样率:", self.gaze_sample_rate_combo)
         
         self.auto_reconnect_check = QCheckBox("自动重连")
         self.auto_reconnect_check.setChecked(True)
-        self.auto_reconnect_check.setStyleSheet("font-size: 14px; padding: 5px;")
-        glasses_layout.addWidget(self.auto_reconnect_check)
+        self.auto_reconnect_check.setMinimumHeight(28)
+        glasses_layout.addRow("", self.auto_reconnect_check)
         
         glasses_group.setLayout(glasses_layout)
         layout.addWidget(glasses_group)
         
         # 界面设置
         ui_group = QGroupBox("界面设置")
-        ui_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                color: #ec4899;
-                border: 2px solid #e2e8f0;
-                border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-        """)
         ui_layout = QFormLayout()
+        ui_layout.setContentsMargins(15, 15, 15, 15)
+        ui_layout.setSpacing(10)
+        ui_layout.setLabelAlignment(Qt.AlignRight)
         
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["浅色主题", "深色主题", "护眼模式"])
-        self.theme_combo.setStyleSheet("""
-            QComboBox {
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 14px;
-            }
-        """)
         self.theme_combo.currentTextChanged.connect(self.apply_theme)
+        self.theme_combo.setMinimumHeight(28)
         ui_layout.addRow("主题:", self.theme_combo)
         
         self.font_size_spin = QSpinBox()
         self.font_size_spin.setRange(10, 20)
         self.font_size_spin.setValue(12)
         self.font_size_spin.setSuffix(" pt")
-        self.font_size_spin.setStyleSheet("""
-            QSpinBox {
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 14px;
-            }
-        """)
+        self.font_size_spin.setMinimumHeight(28)
         ui_layout.addRow("字体大小:", self.font_size_spin)
         
         self.show_gaze_point_check = QCheckBox("显示注视点")
         self.show_gaze_point_check.setChecked(True)
-        self.show_gaze_point_check.setStyleSheet("font-size: 14px; padding: 5px;")
-        ui_layout.addWidget(self.show_gaze_point_check)
+        self.show_gaze_point_check.setMinimumHeight(28)
+        ui_layout.addRow("", self.show_gaze_point_check)
         
         self.show_heatmap_check = QCheckBox("显示热力图")
         self.show_heatmap_check.setChecked(True)
-        self.show_heatmap_check.setStyleSheet("font-size: 14px; padding: 5px;")
-        ui_layout.addWidget(self.show_heatmap_check)
+        self.show_heatmap_check.setMinimumHeight(28)
+        ui_layout.addRow("", self.show_heatmap_check)
         
         ui_group.setLayout(ui_layout)
         layout.addWidget(ui_group)
         
         # 模拟器设置
         sim_group = QGroupBox("模拟器模式")
-        sim_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                color: #10b981;
-                border: 2px solid #e2e8f0;
-                border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-        """)
         sim_layout = QVBoxLayout()
+        sim_layout.setContentsMargins(15, 15, 15, 15)
+        sim_layout.setSpacing(10)
         
         self.simulator_check = QCheckBox("启用模拟器模式（无眼动仪时使用）")
         self.simulator_check.setChecked(False)
-        self.simulator_check.setStyleSheet("font-size: 14px; padding: 8px;")
         self.simulator_check.toggled.connect(self.toggle_simulator_mode)
+        self.simulator_check.setMinimumHeight(28)
         sim_layout.addWidget(self.simulator_check)
         
-        sim_desc = QLabel(" 开启后，可以使用鼠标移动模拟眼动数据，适合在没有眼动仪的情况下测试系统功能。")
-        sim_desc.setStyleSheet("color: #64748b; font-size: 12px; padding: 8px;")
+        sim_desc = QLabel("开启后，可以使用鼠标移动模拟眼动数据，适合在没有眼动仪的情况下测试系统功能。")
         sim_desc.setWordWrap(True)
+        sim_desc.setStyleSheet("color: #6b7280; padding: 5px 0;")
         sim_layout.addWidget(sim_desc)
         
         sim_group.setLayout(sim_layout)
@@ -1071,22 +1055,8 @@ class MainWindow(QMainWindow):
         
         # 保存设置按钮
         save_settings_btn = QPushButton("💾 保存设置")
-        save_settings_btn.setFont(QFont("Microsoft YaHei", 13, QFont.Bold))
-        save_settings_btn.setMinimumHeight(50)
-        save_settings_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #8b5cf6;
-                color: white;
-                border-radius: 8px;
-                padding: 12px;
-            }
-            QPushButton:hover {
-                background-color: #7c3aed;
-            }
-            QPushButton:pressed {
-                background-color: #6d28d9;
-            }
-        """)
+        save_settings_btn.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
+        save_settings_btn.setMinimumHeight(45)
         save_settings_btn.clicked.connect(self.save_settings_from_ui)
         layout.addWidget(save_settings_btn)
         
@@ -1094,66 +1064,34 @@ class MainWindow(QMainWindow):
         export_btn = QPushButton("📊 导出所有训练报告")
         export_btn.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
         export_btn.setMinimumHeight(45)
-        export_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #8b5cf6, stop:1 #a78bfa);
-                color: white;
-                border-radius: 8px;
-                padding: 10px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #7c3aed, stop:1 #8b5cf6);
-            }
-        """)
         export_btn.clicked.connect(self.export_all_reports)
         layout.addWidget(export_btn)
         
         # 校准参数显示
         calibration_group = QGroupBox("校准参数")
-        calibration_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                color: #f59e0b;
-                border: 2px solid #e2e8f0;
-                border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-        """)
         calibration_layout = QGridLayout()
+        calibration_layout.setContentsMargins(15, 15, 15, 15)
+        calibration_layout.setSpacing(12)
         
         self.cal_offset_u_label = QLabel("U轴偏移: 0.0000")
-        self.cal_offset_u_label.setStyleSheet("font-size: 14px; color: #475569; padding: 8px;")
+        self.cal_offset_u_label.setMinimumHeight(28)
         calibration_layout.addWidget(self.cal_offset_u_label, 0, 0)
         
         self.cal_offset_v_label = QLabel("V轴偏移: 0.0000")
-        self.cal_offset_v_label.setStyleSheet("font-size: 14px; color: #475569; padding: 8px;")
+        self.cal_offset_v_label.setMinimumHeight(28)
         calibration_layout.addWidget(self.cal_offset_v_label, 0, 1)
         
         self.cal_scale_u_label = QLabel("U轴缩放: 1.0000")
-        self.cal_scale_u_label.setStyleSheet("font-size: 14px; color: #475569; padding: 8px;")
+        self.cal_scale_u_label.setMinimumHeight(28)
         calibration_layout.addWidget(self.cal_scale_u_label, 1, 0)
         
         self.cal_scale_v_label = QLabel("V轴缩放: 1.0000")
-        self.cal_scale_v_label.setStyleSheet("font-size: 14px; color: #475569; padding: 8px;")
+        self.cal_scale_v_label.setMinimumHeight(28)
         calibration_layout.addWidget(self.cal_scale_v_label, 1, 1)
         
         reset_cal_btn = QPushButton("🔄 重置校准参数")
         reset_cal_btn.setFont(QFont("Microsoft YaHei", 11))
         reset_cal_btn.setMinimumHeight(40)
-        reset_cal_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f59e0b;
-                color: white;
-                border-radius: 6px;
-                padding: 8px;
-            }
-            QPushButton:hover {
-                background-color: #d97706;
-            }
-        """)
         reset_cal_btn.clicked.connect(self.reset_calibration)
         calibration_layout.addWidget(reset_cal_btn, 2, 0, 1, 2)
         
@@ -1162,30 +1100,22 @@ class MainWindow(QMainWindow):
         
         # 关于信息
         about_group = QGroupBox("关于系统")
-        about_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                color: #64748b;
-                border: 2px solid #e2e8f0;
-                border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-        """)
         about_layout = QVBoxLayout()
+        about_layout.setContentsMargins(15, 15, 15, 15)
+        about_layout.setSpacing(10)
         
         about_text = QLabel(
-            "<h3 style='color: #3b82f6;'>编程初学者代码阅读专注力训练系统</h3>"
-            "<p><b>版本:</b> v2.0</p>"
-            "<p><b>功能特性:</b></p>"
-            "<ul>"
+            "<h3 style='color: #3b82f6; margin: 0 0 10px 0;'>编程初学者代码阅读专注力训练系统</h3>"
+            "<p style='margin: 5px 0;'><b>版本:</b> v2.0</p>"
+            "<p style='margin: 5px 0;'><b>功能特性:</b></p>"
+            "<ul style='margin: 5px 0 10px 20px;'>"
             "<li>实时眼动追踪与可视化</li>"
             "<li>专注度评估与分析</li>"
             "<li>屏幕校准功能</li>"
             "<li>训练任务管理</li>"
             "<li>数据报告生成</li>"
             "</ul>"
-            "<p><b>技术支持:</b> Tobii Pro Glasses 3</p>"
+            "<p style='margin: 5px 0;'><b>技术支持:</b> Tobii Pro Glasses 3</p>"
         )
         about_text.setStyleSheet("font-size: 13px; color: #475569; line-height: 1.6;")
         about_text.setWordWrap(True)
@@ -1406,13 +1336,17 @@ class MainWindow(QMainWindow):
                 pos = event.pos()
                 x, y = pos.x(), pos.y()
                 
+                # 转换为全局坐标，以便 training_widget 统一处理
+                global_pos = self.training_widget.code_editor.viewport().mapToGlobal(pos)
+                gx, gy = global_pos.x(), global_pos.y()
+                
                 # 计算时间间隔
                 current_time = time.time()
                 dt = current_time - self.last_time
                 self.last_time = current_time
                 
-                # 调用训练模块的check_gaze（这会更新训练模块内部的注视点）
-                self.training_widget.check_gaze(x, y, dt)
+                # 调用训练模块的check_gaze（传入全局坐标）
+                self.training_widget.check_gaze(gx, gy, dt)
                 
                 # 注释掉全局注视点更新，避免重复显示
                 # 训练模块已经在内部显示注视点了
@@ -2792,34 +2726,92 @@ class MainWindow(QMainWindow):
             f"💡 提示：请在训练任务中观察注视点是否更准确！"
         )
     
+    def load_user_info_from_db(self):
+        """从数据库加载当前用户信息到输入框"""
+        if not self.current_user_id or not hasattr(self, 'db') or self.db is None:
+            return
+        try:
+            conn = self.db.get_connection()
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT username, student_id, experience_level FROM users WHERE id = ?", (self.current_user_id,))
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                self.user_name_input.setText(row['username'])
+                self.user_id_input.setText(row['student_id'] or '')
+                
+                level_map = {'Beginner': '初级', 'Intermediate': '中级', 'Advanced': '高级'}
+                db_level = row['experience_level'] or 'Beginner'
+                display_level = level_map.get(db_level, '初级')
+                index = self.user_level_combo.findText(display_level)
+                if index >= 0:
+                    self.user_level_combo.setCurrentIndex(index)
+        except Exception as e:
+            print(f"[加载用户信息失败] {e}")
+
+    def update_summary_from_db(self):
+        """从数据库更新训练统计摘要"""
+        if not self.current_user_id or not hasattr(self, 'db') or self.db is None:
+            return
+        try:
+            history = self.db.get_user_history(self.current_user_id)
+            total_sessions = len(history)
+            
+            if total_sessions > 0:
+                total_time = sum(r['total_time'] for r in history)
+                scores = [r['accuracy'] for r in history if r['accuracy'] is not None]
+                avg_score = sum(scores) / len(scores) if scores else 0
+                max_score = max(scores) if scores else 0
+                
+                self.total_sessions_label.setText(f"📊 总训练次数: {total_sessions}")
+                self.total_time_label.setText(f"⏱️ 总训练时长: {int(total_time / 60)}分钟")
+                self.avg_attention_label.setText(f"🎯 平均专注度: {avg_score:.1f}%")
+                self.best_score_label.setText(f"🏆 最高专注度: {max_score:.1f}%")
+            else:
+                self.total_sessions_label.setText("📊 总训练次数: 0")
+                self.total_time_label.setText("⏱️ 总训练时长: 0分钟")
+                self.avg_attention_label.setText("🎯 平均专注度: 0%")
+                self.best_score_label.setText("🏆 最高专注度: 0%")
+        except Exception as e:
+            print(f"[更新统计摘要失败] {e}")
+
     def save_user_info(self):
-        """保存用户信息"""
-        user_name = self.user_name_input.text().strip()
-        user_id = self.user_id_input.text().strip()
+        """保存用户信息到数据库"""
+        if not self.current_user_id:
+            QMessageBox.warning(self, "提示", "请先登录")
+            return
         
-        if not user_name or not user_id:
+        name = self.user_name_input.text().strip()
+        sid = self.user_id_input.text().strip()
+        
+        if not name or not sid:
             QMessageBox.warning(self, "提示", "请填写完整的用户信息")
             return
         
-        # 更新用户数据
-        self.user_data['name'] = user_name
-        self.user_data['user_id'] = user_id
-        self.user_data['level'] = self.user_level_combo.currentText()
-        self.user_data['experience'] = self.user_experience_spin.value()
+        level_display = self.user_level_combo.currentText()
+        level_map = {'初级': 'Beginner', '中级': 'Intermediate', '高级': 'Advanced'}
+        level_db = level_map.get(level_display, 'Beginner')
         
-        # 保存到文件
-        if self.save_user_data():
-            QMessageBox.information(
-                self,
-                "✅ 保存成功",
-                f"用户信息已保存：\n\n"
-                f"姓名: {user_name}\n"
-                f"学号/工号: {user_id}\n"
-                f"编程水平: {self.user_level_combo.currentText()}\n"
-                f"编程经验: {self.user_experience_spin.value()} 个月"
-            )
-        else:
-            QMessageBox.critical(self, "错误", "保存失败，请重试")
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE users 
+            SET username = ?, student_id = ?, experience_level = ?
+            WHERE id = ?
+        """, (name, sid, level_db, self.current_user_id))
+        conn.commit()
+        conn.close()
+        
+        QMessageBox.information(
+            self,
+            "✅ 保存成功",
+            f"用户信息已保存到数据库：\n\n"
+            f"姓名: {name}\n"
+            f"学号/工号: {sid}\n"
+            f"编程水平: {level_display}"
+        )
     
     def reset_calibration(self):
         """重置校准参数"""
@@ -2946,6 +2938,22 @@ class MainWindow(QMainWindow):
     
     def load_user_data(self):
         """加载用户数据"""
+        # 如果用户已登录（current_user_id 不是默认值 1），则从数据库加载，跳过 JSON 文件
+        if hasattr(self, 'current_user_id') and self.current_user_id and self.current_user_id != 1:
+            print(f"[INFO] 用户已登录 (ID: {self.current_user_id})，跳过 JSON 文件加载，使用数据库数据")
+            self.user_data = {
+                'name': '',
+                'user_id': '',
+                'level': '初级',
+                'experience': 0,
+                'total_sessions': 0,
+                'avg_attention': 0,
+                'total_time': 0,
+                'best_score': 0,
+                'achievements': []
+            }
+            return
+        
         default_data = {
             'name': '',
             'user_id': '',
@@ -3261,89 +3269,421 @@ class MainWindow(QMainWindow):
     
     def apply_theme(self, theme_name):
         """应用主题"""
+        # 1. 更新编辑器样式
+        if hasattr(self, 'training_widget') and self.training_widget:
+            editor = self.training_widget.code_editor
+            if theme_name == "深色主题":
+                editor.apply_theme_style('dark')
+            elif theme_name == "护眼主题":
+                editor.apply_theme_style('eye')
+            else:
+                editor.apply_theme_style('light')
+
+        # 2. 应用全局 QSS
         if theme_name == "深色主题":
-            # 深色主题样式
+            # 深色主题样式 - 现代科技感
             self.setStyleSheet("""
                 QMainWindow {
-                    background-color: #1e293b;
+                    background-color: #0f172a;
                 }
                 QWidget {
-                    background-color: #1e293b;
-                    color: #e2e8f0;
+                    background-color: #0f172a;
+                    color: #f8fafc;
                 }
                 QGroupBox {
-                    color: #e2e8f0;
-                    border: 2px solid #334155;
+                    color: #94a3b8;
+                    border: 2px solid #1e293b;
+                    border-radius: 8px;
+                    margin-top: 16px;
+                    padding-top: 16px;
+                    font-weight: bold;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 16px;
+                    padding: 0 8px;
+                    color: #38bdf8;
                 }
                 QLabel {
-                    color: #e2e8f0;
+                    color: #cbd5e1;
                 }
-                QLineEdit, QComboBox, QSpinBox {
-                    background-color: #334155;
-                    color: #e2e8f0;
-                    border: 1px solid #475569;
+                QLineEdit, QSpinBox {
+                    background-color: #1e293b;
+                    color: #f8fafc;
+                    border: 1px solid #334155;
+                    border-radius: 6px;
+                    padding: 8px;
+                }
+                QLineEdit:focus, QSpinBox:focus {
+                    border: 1px solid #3b82f6;
+                }
+                QComboBox {
+                    background-color: #1e293b;
+                    color: #f8fafc;
+                    border: 1px solid #334155;
+                    border-radius: 6px;
+                    padding: 8px;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    width: 20px;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border: 2px solid #94a3b8;
+                    border-top: none;
+                    border-left: none;
+                    width: 8px;
+                    height: 8px;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #1e293b;
+                    color: #f8fafc;
+                    selection-background-color: #3b82f6;
+                    selection-color: white;
+                    border: 1px solid #334155;
                 }
                 QPushButton {
                     background-color: #3b82f6;
                     color: white;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 10px 20px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #2563eb;
                 }
                 QTabWidget::pane {
-                    border: 2px solid #334155;
+                    border: 2px solid #1e293b;
+                    background-color: #0f172a;
+                    border-radius: 8px;
+                }
+                QTabBar::tab {
                     background-color: #1e293b;
+                    color: #94a3b8;
+                    padding: 10px 20px;
+                    border-top-left-radius: 6px;
+                    border-top-right-radius: 6px;
                 }
-                QTableWidget {
-                    background-color: #1e293b;
-                    color: #e2e8f0;
-                    gridline-color: #334155;
-                }
-                QHeaderView::section {
-                    background-color: #334155;
-                    color: #e2e8f0;
-                }
-            """)
-        elif theme_name == "护眼模式":
-            # 护眼模式样式（淡绿色）
-            self.setStyleSheet("""
-                QMainWindow {
-                    background-color: #f0f9f0;
-                }
-                QWidget {
-                    background-color: #f0f9f0;
-                    color: #2d3748;
-                }
-                QGroupBox {
-                    color: #2d3748;
-                    border: 2px solid #c6f6d5;
-                }
-                QLabel {
-                    color: #2d3748;
-                }
-                QLineEdit, QComboBox, QSpinBox {
-                    background-color: #ffffff;
-                    color: #2d3748;
-                    border: 1px solid #9ae6b4;
-                }
-                QPushButton {
-                    background-color: #48bb78;
+                QTabBar::tab:selected {
+                    background-color: #3b82f6;
                     color: white;
                 }
-                QTabWidget::pane {
-                    border: 2px solid #c6f6d5;
-                    background-color: #f0f9f0;
+                QTextEdit {
+                    background-color: #1e293b;
+                    color: #f8fafc;
+                    border: 1px solid #334155;
+                    selection-background-color: #3b82f6;
                 }
                 QTableWidget {
-                    background-color: #f0f9f0;
-                    color: #2d3748;
-                    gridline-color: #c6f6d5;
+                    background-color: #0f172a;
+                    color: #f8fafc;
+                    gridline-color: #1e293b;
+                    border: 1px solid #1e293b;
                 }
                 QHeaderView::section {
-                    background-color: #c6f6d5;
-                    color: #2d3748;
+                    background-color: #1e293b;
+                    color: #38bdf8;
+                    padding: 8px;
+                    border: none;
+                    font-weight: bold;
+                }
+                QScrollBar:vertical {
+                    background-color: #0f172a;
+                    width: 12px;
+                    border-radius: 6px;
+                }
+                QScrollBar::handle:vertical {
+                    background-color: #334155;
+                    border-radius: 6px;
+                }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                    height: 0px;
                 }
             """)
+            # 同步更新训练模块代码编辑器样式
+            if hasattr(self, 'training_widget'):
+                self.training_widget.code_editor.setStyleSheet("""
+                    QTextEdit {
+                        background-color: #1e293b;
+                        color: #f8fafc;
+                        border: 1px solid #334155;
+                        selection-background-color: #3b82f6;
+                    }
+                """)
+        elif theme_name == "护眼模式":
+            # 护眼模式样式 - 柔和淡绿色
+            self.setStyleSheet("""
+                QMainWindow {
+                    background-color: #ecfdf5;
+                }
+                QWidget {
+                    background-color: #ecfdf5;
+                    color: #1e293b;
+                }
+                QGroupBox {
+                    color: #047857;
+                    border: 2px solid #d1fae5;
+                    border-radius: 8px;
+                    margin-top: 16px;
+                    padding-top: 16px;
+                    font-weight: bold;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 16px;
+                    padding: 0 8px;
+                    color: #059669;
+                }
+                QLabel {
+                    color: #374151;
+                }
+                QLineEdit, QSpinBox {
+                    background-color: #ffffff;
+                    color: #1e293b;
+                    border: 1px solid #a7f3d0;
+                    border-radius: 6px;
+                    padding: 8px;
+                }
+                QLineEdit:focus, QSpinBox:focus {
+                    border: 1px solid #10b981;
+                }
+                QComboBox {
+                    background-color: #ffffff;
+                    color: #1e293b;
+                    border: 1px solid #a7f3d0;
+                    border-radius: 6px;
+                    padding: 8px;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    width: 20px;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border: 2px solid #047857;
+                    border-top: none;
+                    border-left: none;
+                    width: 8px;
+                    height: 8px;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #ffffff;
+                    color: #1e293b;
+                    selection-background-color: #d1fae5;
+                    selection-color: #047857;
+                    border: 1px solid #a7f3d0;
+                }
+                QPushButton {
+                    background-color: #10b981;
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 10px 20px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #059669;
+                }
+                QTabWidget::pane {
+                    border: 2px solid #d1fae5;
+                    background-color: #ecfdf5;
+                    border-radius: 8px;
+                }
+                QTabBar::tab {
+                    background-color: #d1fae5;
+                    color: #047857;
+                    padding: 10px 20px;
+                    border-top-left-radius: 6px;
+                    border-top-right-radius: 6px;
+                }
+                QTabBar::tab:selected {
+                    background-color: #10b981;
+                    color: white;
+                }
+                QTextEdit {
+                    background-color: #ffffff;
+                    color: #1e293b;
+                    border: 1px solid #a7f3d0;
+                    selection-background-color: #d1fae5;
+                }
+                QTableWidget {
+                    background-color: #ecfdf5;
+                    color: #1e293b;
+                    gridline-color: #d1fae5;
+                    border: 1px solid #d1fae5;
+                }
+                QHeaderView::section {
+                    background-color: #d1fae5;
+                    color: #047857;
+                    padding: 8px;
+                    border: none;
+                    font-weight: bold;
+                }
+                QScrollBar:vertical {
+                    background-color: #ecfdf5;
+                    width: 12px;
+                    border-radius: 6px;
+                }
+                QScrollBar::handle:vertical {
+                    background-color: #a7f3d0;
+                    border-radius: 6px;
+                }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                    height: 0px;
+                }
+            """)
+            # 同步更新训练模块代码编辑器样式
+            if hasattr(self, 'training_widget'):
+                self.training_widget.code_editor.setStyleSheet("""
+                    QTextEdit {
+                        background-color: #ffffff;
+                        color: #1e293b;
+                        border: 1px solid #a7f3d0;
+                        selection-background-color: #d1fae5;
+                    }
+                """)
         else:
-            # 浅色主题（默认）
-            self.setStyleSheet("")
+            # 浅色主题（默认）- 简洁明亮
+            self.setStyleSheet("""
+                QMainWindow {
+                    background-color: #ffffff;
+                }
+                QWidget {
+                    background-color: #ffffff;
+                    color: #1f2937;
+                }
+                QGroupBox {
+                    color: #374151;
+                    border: 2px solid #e5e7eb;
+                    border-radius: 8px;
+                    margin-top: 20px;
+                    padding: 20px 16px 16px 16px;
+                    font-weight: bold;
+                    font-size: 13px;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    left: 16px;
+                    padding: 0 8px;
+                    color: #2563eb;
+                }
+                QLabel {
+                    color: #4b5563;
+                    font-size: 12px;
+                }
+                QLineEdit, QSpinBox {
+                    background-color: #f9fafb;
+                    color: #1f2937;
+                    border: 1px solid #d1d5db;
+                    border-radius: 6px;
+                    padding: 8px;
+                    font-size: 12px;
+                    min-height: 28px;
+                }
+                QLineEdit:focus, QSpinBox:focus {
+                    border: 1px solid #3b82f6;
+                }
+                QComboBox {
+                    background-color: #f9fafb;
+                    color: #1f2937;
+                    border: 1px solid #d1d5db;
+                    border-radius: 6px;
+                    padding: 8px;
+                    font-size: 12px;
+                    min-height: 28px;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    width: 20px;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border: 2px solid #6b7280;
+                    border-top: none;
+                    border-left: none;
+                    width: 8px;
+                    height: 8px;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #ffffff;
+                    color: #1f2937;
+                    selection-background-color: #bfdbfe;
+                    selection-color: #1f2937;
+                    border: 1px solid #d1d5db;
+                }
+                QPushButton {
+                    background-color: #3b82f6;
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 10px 20px;
+                    font-weight: bold;
+                    font-size: 12px;
+                    min-height: 32px;
+                }
+                QPushButton:hover {
+                    background-color: #2563eb;
+                }
+                QTabWidget::pane {
+                    border: 2px solid #e5e7eb;
+                    background-color: #ffffff;
+                    border-radius: 8px;
+                }
+                QTabBar::tab {
+                    background-color: #f3f4f6;
+                    color: #6b7280;
+                    padding: 10px 20px;
+                    border-top-left-radius: 6px;
+                    border-top-right-radius: 6px;
+                }
+                QTabBar::tab:selected {
+                    background-color: #3b82f6;
+                    color: white;
+                }
+                QTextEdit {
+                    background-color: #f9fafb;
+                    color: #1f2937;
+                    border: 1px solid #d1d5db;
+                    selection-background-color: #bfdbfe;
+                }
+                QTableWidget {
+                    background-color: #ffffff;
+                    color: #1f2937;
+                    gridline-color: #e5e7eb;
+                    border: 1px solid #e5e7eb;
+                }
+                QHeaderView::section {
+                    background-color: #f3f4f6;
+                    color: #2563eb;
+                    padding: 8px;
+                    border: none;
+                    font-weight: bold;
+                }
+                QScrollBar:vertical {
+                    background-color: #ffffff;
+                    width: 12px;
+                    border-radius: 6px;
+                }
+                QScrollBar::handle:vertical {
+                    background-color: #d1d5db;
+                    border-radius: 6px;
+                }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                    height: 0px;
+                }
+            """)
+            # 同步更新训练模块代码编辑器样式
+            if hasattr(self, 'training_widget'):
+                self.training_widget.code_editor.setStyleSheet("""
+                    QTextEdit {
+                        background-color: #f9fafb;
+                        color: #1f2937;
+                        border: 1px solid #d1d5db;
+                        selection-background-color: #bfdbfe;
+                    }
+                """)
         
         # 保存设置
         self.settings['theme'] = theme_name

@@ -1,10 +1,11 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QTextEdit, QProgressBar, QPushButton, QGroupBox,
                              QScrollArea, QFrame, QMessageBox)
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPointF, QRectF
-from PyQt5.QtGui import QFont, QColor, QPalette, QTextCharFormat, QTextCursor, QPainter, QPen, QBrush, QTextBlockUserData
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPointF, QRectF, QPoint
+from PyQt5.QtGui import QFont, QColor, QPalette, QTextCharFormat, QTextCursor, QPainter, QPen, QBrush, QTextBlockUserData, QTextFormat
 import time
 import math
+from database import DatabaseManager
 
 class GazePointWidget(QWidget):
     """注视点显示组件"""
@@ -64,24 +65,84 @@ class GazePointWidget(QWidget):
 
 
 class HighlightedCodeEditor(QTextEdit):
-    """支持行高亮和视觉引导的代码编辑器"""
+    """支持行高亮和视觉引导的代码编辑器（基于 ExtraSelection）"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.highlighted_lines = set()  # 需要高亮的行号
-        self.current_guide_line = -1  # 当前引导的行号
-        self.gaze_dwell_times = {}  # 每行的注视停留时间 {line_number: total_time}
-        self.last_gaze_line = -1  # 上次注视的行号
-        self.last_gaze_time = time.time()  # 上次注视时间
+        self.setReadOnly(True)  # 代码阅读模式，不可编辑
+        self.setMouseTracking(True)  # 开启鼠标追踪，用于无设备时的模拟测试
         
+        # 核心状态变量
+        self.highlighted_lines = set()  # 已完成的高亮行号
+        self.current_guide_line = -1  # 当前引导的行号
+        self.current_guide_start = -1  # 引导范围起始行
+        self.current_guide_end = -1  # 引导范围结束行
+        self.current_gaze_line = -1  # 用户当前视线落在哪一行
+        self.gaze_dwell_times = {}  # 每行的注视停留时间
+        self.last_gaze_time = time.time()
+        
+        # 默认样式（浅色主题）
+        self.apply_theme_style('light')
+    
+    def apply_theme_style(self, theme):
+        """应用主题样式"""
+        font = QFont("Consolas", 13)
+        self.setFont(font)
+        
+        if theme == 'dark':
+            self.setStyleSheet("""
+                QTextEdit {
+                    background-color: #1E1E1E;
+                    color: #D4D4D4;
+                    border: 2px solid #333333;
+                    border-radius: 8px;
+                    padding: 10px;
+                    line-height: 1.5;
+                }
+            """)
+        elif theme == 'eye':
+            self.setStyleSheet("""
+                QTextEdit {
+                    background-color: #F0FDF4;
+                    color: #1F2937;
+                    border: 2px solid #A7F3D0;
+                    border-radius: 8px;
+                    padding: 10px;
+                    line-height: 1.5;
+                }
+            """)
+        else:  # light
+            self.setStyleSheet("""
+                QTextEdit {
+                    background-color: #F9FAFB;
+                    color: #1F2937;
+                    border: 2px solid #E5E7EB;
+                    border-radius: 8px;
+                    padding: 10px;
+                    line-height: 1.5;
+                }
+            """)
+    
     def set_highlighted_lines(self, line_numbers):
-        """设置需要高亮的行号集合"""
+        """设置已完成的高亮行号集合"""
         self.highlighted_lines = set(line_numbers)
-        self.viewport().update()
+        self.highlight_lines()
     
     def set_guide_line(self, line_number):
         """设置引导行（下一步该看的行）"""
         self.current_guide_line = line_number
-        self.viewport().update()
+        self.highlight_lines()
+    
+    def set_guide_range(self, start_line, end_line):
+        """设置引导范围（多行高亮）"""
+        self.current_guide_start = start_line
+        self.current_guide_end = end_line
+        self.highlight_lines()
+    
+    def set_current_gaze_line(self, line_number):
+        """设置当前注视行"""
+        if line_number != self.current_gaze_line:
+            self.current_gaze_line = line_number
+            self.highlight_lines()
     
     def update_gaze_dwell(self, line_number, dt):
         """更新某行的注视停留时间"""
@@ -89,61 +150,78 @@ class HighlightedCodeEditor(QTextEdit):
             self.gaze_dwell_times[line_number] = 0
         self.gaze_dwell_times[line_number] += dt
     
-    def get_line_at_position(self, y_pos):
-        """根据Y坐标获取行号"""
-        cursor = self.cursorForPosition(QPointF(0, y_pos).toPoint())
-        return cursor.blockNumber()
+    def process_gaze_coordinate(self, global_x, global_y):
+        """
+        AOI (兴趣区) 映射引擎：
+        将屏幕绝对坐标 (x,y) 转化为代码行号
+        """
+        local_pos = self.mapFromGlobal(QPoint(global_x, global_y))
+        
+        if not self.rect().contains(local_pos):
+            if self.current_gaze_line != -1:
+                self.current_gaze_line = -1
+                self.highlight_lines()
+            return
+        
+        cursor = self.cursorForPosition(local_pos)
+        line_number = cursor.blockNumber()
+        
+        if line_number != self.current_gaze_line:
+            self.current_gaze_line = line_number
+            self.highlight_lines()
     
-    def paintEvent(self, event):
-        """重写绘制事件，添加行高亮和引导标记"""
-        super().paintEvent(event)
+    def highlight_lines(self):
+        """执行视觉高亮渲染（使用 ExtraSelection）"""
+        extra_selections = []
         
-        painter = QPainter(self.viewport())
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        # 获取文档中的所有文本块
-        document = self.document()
-        block = document.begin()
-        
-        # 绘制高亮和引导
-        while block.isValid():
-            line_number = block.blockNumber()
-            
-            # 获取该行的矩形区域
-            cursor = QTextCursor(block)
-            rect = self.cursorRect(cursor)
-            
-            # 如果矩形无效（不在可见区域），跳过
-            if not rect.isValid() or rect.height() <= 0:
-                block = block.next()
-                continue
-            
-            # 如果是引导行，绘制特殊标记
-            if line_number == self.current_guide_line:
-                # 绘制闪烁的边框
-                flash_alpha = int(128 + 127 * math.sin(time.time() * 4))
-                guide_color = QColor(251, 191, 36, flash_alpha)  # 黄色闪烁
-                painter.setPen(QPen(guide_color, 3))
-                painter.setBrush(QBrush(QColor(251, 191, 36, 50)))
-                painter.drawRect(rect.adjusted(-5, 2, 5, -2))
+        # 渲染 1: 引导范围的高亮（黄色闪烁背景）- 支持多行
+        if self.current_guide_start >= 0 and self.current_guide_end >= 0:
+            for line_num in range(self.current_guide_start, self.current_guide_end + 1):
+                guide_selection = QTextEdit.ExtraSelection()
+                guide_format = guide_selection.format
+                # 黄色闪烁效果
+                flash_alpha = int(180 + 75 * math.sin(time.time() * 4))
+                guide_format.setBackground(QColor(251, 191, 36, flash_alpha))
+                guide_format.setProperty(QTextFormat.FullWidthSelection, True)
                 
-                # 绘制箭头指示
-                arrow_x = rect.right() + 10
-                arrow_y = rect.center().y()
-                painter.setPen(QPen(guide_color, 2))
-                painter.drawLine(arrow_x - 8, arrow_y, arrow_x, arrow_y)
-                painter.drawLine(arrow_x, arrow_y, arrow_x - 5, arrow_y - 5)
-                painter.drawLine(arrow_x, arrow_y, arrow_x - 5, arrow_y + 5)
+                cursor = QTextCursor(self.document().findBlockByNumber(line_num))
+                guide_selection.cursor = cursor
+                extra_selections.append(guide_selection)
+        elif self.current_guide_line >= 0:
+            guide_selection = QTextEdit.ExtraSelection()
+            guide_format = guide_selection.format
+            flash_alpha = int(180 + 75 * math.sin(time.time() * 4))
+            guide_format.setBackground(QColor(251, 191, 36, flash_alpha))
+            guide_format.setProperty(QTextFormat.FullWidthSelection, True)
             
-            # 如果是已完成的高亮行，绘制绿色背景
-            elif line_number in self.highlighted_lines:
-                painter.setPen(Qt.NoPen)
-                painter.setBrush(QBrush(QColor(16, 185, 129, 40)))  # 半透明绿色
-                painter.drawRect(rect.adjusted(-5, 2, 5, -2))
-            
-            block = block.next()
+            cursor = QTextCursor(self.document().findBlockByNumber(self.current_guide_line))
+            guide_selection.cursor = cursor
+            extra_selections.append(guide_selection)
         
-        painter.end()
+        # 渲染 2: 当前注视行的高亮（蓝色跟随）
+        if self.current_gaze_line >= 0:
+            gaze_selection = QTextEdit.ExtraSelection()
+            gaze_format = gaze_selection.format
+            gaze_format.setBackground(QColor(59, 130, 246, 80))  # 半透明蓝色
+            gaze_format.setProperty(QTextFormat.FullWidthSelection, True)
+            
+            cursor = QTextCursor(self.document().findBlockByNumber(self.current_gaze_line))
+            gaze_selection.cursor = cursor
+            extra_selections.append(gaze_selection)
+        
+        # 渲染 3: 已完成行的高亮（绿色背景）
+        for line_num in self.highlighted_lines:
+            if line_num != self.current_guide_line:  # 避免覆盖引导行
+                completed_selection = QTextEdit.ExtraSelection()
+                completed_format = completed_selection.format
+                completed_format.setBackground(QColor(16, 185, 129, 60))  # 半透明绿色
+                completed_format.setProperty(QTextFormat.FullWidthSelection, True)
+                
+                cursor = QTextCursor(self.document().findBlockByNumber(line_num))
+                completed_selection.cursor = cursor
+                extra_selections.append(completed_selection)
+        
+        self.setExtraSelections(extra_selections)
 
 class CodeBlock:
     """代码块定义"""
@@ -176,6 +254,11 @@ class TrainingWidget(QWidget):
     
     def __init__(self):
         super().__init__()
+        
+        # 初始化数据库
+        self.db = DatabaseManager()
+        self.current_user_id = 1  # 默认用户ID，后续可由主界面传入
+        self.current_record_id = None # 当前训练记录的ID，用于存储原始数据
         
         # 训练状态
         self.current_task = None
@@ -296,6 +379,16 @@ class TrainingWidget(QWidget):
         self.code_editor = HighlightedCodeEditor()
         self.code_editor.setFont(QFont("Consolas", 13))
         self.code_editor.setReadOnly(True)
+        
+        # 默认样式（浅色主题）
+        self.code_editor.setStyleSheet("""
+            QTextEdit {
+                background-color: #f9fafb;
+                color: #1f2937;
+                border: 1px solid #d1d5db;
+                selection-background-color: #bfdbfe;
+            }
+        """)
         
         # 根据屏幕分辨率设置最小尺寸
         from PyQt5.QtWidgets import QApplication
@@ -526,9 +619,9 @@ if __name__ == "__main__":
     print(f"结果: {result}")""",
             blocks=[
                 CodeBlock("函数定义", 1, 1, "注视函数名 'calculate_sum'"),
-                CodeBlock("变量初始化", 2, 3, "注视变量 'total' 和 'count'"),
-                CodeBlock("循环结构", 5, 7, "注视 'for' 关键字"),
-                CodeBlock("累加操作", 6, 6, "注视 'total += i'"),
+                CodeBlock("变量初始化", 2, 2, "注视变量 'total' 和 'count'"),
+                CodeBlock("for 循环", 5, 5, "注视 'for' 关键字"),
+                CodeBlock("循环体", 6, 7, "注视循环体内的累加操作"),
                 CodeBlock("返回值", 10, 10, "注视 'return' 语句"),
             ],
             description="学习识别代码中的基本变量和函数结构"
@@ -637,7 +730,7 @@ print(process_data(data))""",
             self.stop_training()
     
     def start_training(self):
-        """开始训练"""
+        """开始训练并创建数据库记录"""
         self.is_training = True
         self.start_btn.setText("⏸️ 暂停训练")
         self.current_task.start_time = time.time()
@@ -655,6 +748,23 @@ print(process_data(data))""",
         self.last_achievement_time = 0
         if hasattr(self, 'feedback_label'):
             self.feedback_label.hide()
+        
+        # 在数据库中创建一条新的训练记录，获取 ID 用于后续存储原始数据
+        try:
+            self.current_record_id = self.db.save_training_record(
+                user_id=self.current_user_id,
+                task_level=self.current_task.level,
+                task_title=self.current_task.title,
+                completion_rate=0.0,
+                total_time=0.0,
+                regression_count=0,
+                accuracy=0.0,
+                score=0
+            )
+            print(f"[数据库] 开启新训练记录，ID: {self.current_record_id}")
+        except Exception as e:
+            print(f"[数据库错误] 创建记录失败: {e}")
+            self.current_record_id = None
         
         # 启动统计定时器
         self.stats_timer.stop()
@@ -745,33 +855,24 @@ print(process_data(data))""",
             self.update_stats()
     
     def highlight_current_block(self):
-        """高亮当前代码块"""
+        """高亮当前代码块（高亮整个代码块范围）"""
         if not self.current_task or not self.is_training:
             return
         
         block = self.current_task.blocks[self.current_task.current_block_index]
         
-        # 选中代码行（优化：使用setPosition代替循环）
-        cursor = self.code_editor.textCursor()
+        # 高亮整个代码块范围（start_line 到 end_line）
+        self.code_editor.set_guide_range(block.start_line - 1, block.end_line - 1)
         
-        # 获取起始行和结束行的位置
-        cursor.movePosition(cursor.Start)
-        cursor.movePosition(cursor.Down, n=block.start_line - 1)
-        start_pos = cursor.position()
+        # 更新已完成的高亮行
+        completed_lines = []
+        for i, b in enumerate(self.current_task.blocks):
+            if i < self.current_task.current_block_index:
+                # 已完成的高亮整个代码块
+                for line_num in range(b.start_line - 1, b.end_line):
+                    completed_lines.append(line_num)
         
-        cursor.movePosition(cursor.Down, n=block.end_line - block.start_line)
-        cursor.movePosition(cursor.EndOfLine)
-        end_pos = cursor.position()
-        
-        # 一次性设置选区
-        cursor.setPosition(start_pos)
-        cursor.setPosition(end_pos, cursor.KeepAnchor)
-        
-        # 设置高亮格式
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor("#3b82f6"))
-        fmt.setForeground(QColor("#ffffff"))
-        cursor.setCharFormat(fmt)
+        self.code_editor.set_highlighted_lines(completed_lines)
     
     def update_step_instruction(self):
         """更新步骤指导"""
@@ -796,8 +897,8 @@ print(process_data(data))""",
     def _check_and_accumulate_gaze(self, x, y, dt):
         """
         检查注视点是否在目标区域内并累计时间
-        :param x: viewport X 坐标
-        :param y: viewport Y 坐标
+        :param x: viewport X 坐标 (局部坐标)
+        :param y: viewport Y 坐标 (局部坐标)
         :param dt: 时间间隔（秒）
         """
         if not self.current_task or not self.is_training:
@@ -805,21 +906,29 @@ print(process_data(data))""",
         
         current_block = self.current_task.blocks[self.current_task.current_block_index]
         
-        # 获取当前代码块在 viewport 中的坐标（只计算一次）
+        # 获取当前代码块在 viewport 中的精确坐标
         cursor = self.code_editor.textCursor()
         cursor.movePosition(cursor.Start)
         cursor.movePosition(cursor.Down, n=current_block.start_line - 1)
         start_rect = self.code_editor.cursorRect(cursor)
+        
+        # 计算多行的高度
         cursor.movePosition(cursor.Down, n=current_block.end_line - current_block.start_line)
         end_rect = self.code_editor.cursorRect(cursor)
         
+        # 定义判定区域：以黄色高亮行为准
         tx = 0
         ty = start_rect.y()
         tw = self.code_editor.viewport().width()
         th = end_rect.bottom() - start_rect.top()
         
+        # 增加一点垂直方向的容错空间（上下各加 5px），防止红点边缘判定失效
+        ty -= 5
+        th += 10
+        
         # 检查是否在目标区域内
         if tx <= x <= tx + tw and ty <= y <= ty + th:
+            # 核心修复：无论 UI 是否更新，时间必须实时累加
             current_block.dwell_time += dt
             self.valid_fixations += 1
             
@@ -846,39 +955,84 @@ print(process_data(data))""",
                 else:
                     self.highlight_current_block()
             
-            # 降低更新频率
-            if not hasattr(self, '_instruction_counter'):
-                self._instruction_counter = 0
-            self._instruction_counter += 1
-            if self._instruction_counter % 5 == 0:
-                self.update_step_instruction()
+            # 实时更新提示文字
+            self.update_step_instruction()
+        else:
+            # 如果不在目标区域，重置连击数
+            self.combo_count = 0
     
     def check_gaze(self, x, y, dt):
-        """检查视线位置并更新训练状态（只记录位置，不累加时间）"""
-        # 严格检查:必须正在训练且有当前任务
+        """检查视线位置并更新训练状态（实时累加时间）"""
         if not self.is_training or not self.current_task:
             return
         
-        # 忽略无效的坐标
-        if x <= 0 and y <= 0:
-            return
+        # 确保 dt 是正数且合理
+        if dt <= 0 or dt > 1.0:
+            dt = 0.016
         
-        # 保存最新的注视点坐标
-        self.last_gaze_x = x
-        self.last_gaze_y = y
+        # 核心修复：统一将传入的坐标转换为 Viewport 局部坐标
+        # 无论传入的是全局坐标还是局部坐标，我们都通过 mapFromGlobal 进行标准化
+        local_pos = self.code_editor.mapFromGlobal(QPoint(int(x), int(y)))
+        local_x, local_y = local_pos.x(), local_pos.y()
+
+        # 更新编辑器内的注视行显示（process_gaze_coordinate 内部也会做转换）
+        self.code_editor.process_gaze_coordinate(x, y)
+        
+        # 累计当前注视行的停留时间
+        current_line = self.code_editor.current_gaze_line
+        if current_line >= 0:
+            self.code_editor.update_gaze_dwell(current_line, dt)
+            
+            # 2. 实时存储原始眼动数据（每帧都存，用于回放）
+            if self.current_record_id:
+                try:
+                    self.db.save_raw_gaze_data(
+                        record_id=self.current_record_id,
+                        timestamp=time.time(),
+                        gaze_x=local_x,
+                        gaze_y=local_y,
+                        line_number=current_line
+                    )
+                except Exception as e:
+                    pass # 避免频繁打印影响性能
+            
+            # 核心修复：基于“当前高亮块”的相对回视判定
+            current_block = self.current_task.blocks[self.current_task.current_block_index]
+            block_start = current_block.start_line
+            block_end = current_block.end_line
+            
+            # 状态机逻辑：
+            # 1. 如果视线在高亮块内，标记为“在区域内”
+            if block_start <= current_line + 1 <= block_end: # current_line 是 0-based，代码行号是 1-based
+                self.is_inside_target_block = True
+            
+            # 2. 如果之前在区域内，现在跑到了区域上方，算一次回视
+            if hasattr(self, 'is_inside_target_block') and self.is_inside_target_block:
+                if current_line + 1 < block_start:
+                    self.regression_count += 1
+                    self.is_inside_target_block = False # 标记已离开，防止重复计数
+                    print(f"[回视] 从高亮块({block_start}-{block_end})跳出到第 {current_line + 1} 行")
+            
+            # 3. 如果视线回到了高亮块，重置状态，准备捕捉下一次回视
+            elif hasattr(self, 'is_inside_target_block') and not self.is_inside_target_block:
+                if block_start <= current_line + 1 <= block_end:
+                    self.is_inside_target_block = True
+                    print(f"[重置] 视线回到高亮块，准备捕捉下一次回视")
+        
+        # 执行核心的逻辑判断（使用统一的局部坐标）
+        self._check_and_accumulate_gaze(local_x, local_y, dt)
         self.last_gaze_time = time.time()
         
-        # 显示注视点（x, y 已经是 viewport 坐标）
+        # 显示注视点（使用局部坐标绘制）
         if self.gaze_point_widget:
             viewport = self.code_editor.viewport()
-            # 检查是否在 viewport 范围内
-            if (0 <= x < viewport.width() and 
-                0 <= y < viewport.height()):
-                self.gaze_point_widget.add_gaze_point(x, y)
+            if (0 <= local_x < viewport.width() and 
+                0 <= local_y < viewport.height()):
+                self.gaze_point_widget.add_gaze_point(local_x, local_y)
         
         current_block = self.current_task.blocks[self.current_task.current_block_index]
         
-        # 获取当前代码块在 viewport 中的坐标（只计算一次）
+        # 获取当前代码块在 viewport 中的坐标
         cursor = self.code_editor.textCursor()
         cursor.movePosition(cursor.Start)
         cursor.movePosition(cursor.Down, n=current_block.start_line - 1)
@@ -889,17 +1043,8 @@ print(process_data(data))""",
         block_top = start_rect.y()
         block_bottom = end_rect.bottom()
         
-        # 检测回视：只有当注视点在目标代码块区域内时才检测
-        if (hasattr(self, 'prev_gaze_y') and self.prev_gaze_y > 0 and
-            block_top <= y <= block_bottom and
-            block_top <= self.prev_gaze_y <= block_bottom):
-            if y < self.prev_gaze_y - 10:
-                self.regression_count += 1
-        
-        # 只更新在viewport内的Y坐标
-        viewport = self.code_editor.viewport()
-        if 0 <= y < viewport.height():
-            self.prev_gaze_y = y
+        # 移除旧的基于像素位移的回视检测，改用基于行号的判定
+        # （旧代码已移至上方 current_line 判定逻辑中）
         
         self.gaze_x = x
         self.gaze_y = y
@@ -912,80 +1057,10 @@ print(process_data(data))""",
         if self._stats_counter % 10 == 0:
             self.update_stats()
     
-    def _check_and_accumulate_gaze(self, x, y, dt):
-        """
-        检查注视点是否在目标区域内并累计时间
-        :param x: viewport X 坐标
-        :param y: viewport Y 坐标
-        :param dt: 时间间隔（秒）
-        """
-        if not self.current_task or not self.is_training:
-            return
-        
-        current_block = self.current_task.blocks[self.current_task.current_block_index]
-        
-        # 获取当前代码块在 viewport 中的坐标（只计算一次）
-        cursor = self.code_editor.textCursor()
-        cursor.movePosition(cursor.Start)
-        cursor.movePosition(cursor.Down, n=current_block.start_line - 1)
-        start_rect = self.code_editor.cursorRect(cursor)
-        cursor.movePosition(cursor.Down, n=current_block.end_line - current_block.start_line)
-        end_rect = self.code_editor.cursorRect(cursor)
-        
-        tx = 0
-        ty = start_rect.y()
-        tw = self.code_editor.viewport().width()
-        th = end_rect.bottom() - start_rect.top()
-        
-        # 检查是否在目标区域内
-        if tx <= x <= tx + tw and ty <= y <= ty + th:
-            current_block.dwell_time += dt
-            self.valid_fixations += 1
-            
-            # 增加连击数
-            self.combo_count += 1
-            if self.combo_count > self.max_combo:
-                self.max_combo = self.combo_count
-            
-            # 计算得分（基础分 + 连击奖励）
-            base_score = dt * 10
-            combo_bonus = min(self.combo_count * 2, 20)
-            self.score += int(base_score + combo_bonus)
-            
-            # 检查是否完成当前块
-            if current_block.dwell_time >= current_block.required_time:
-                current_block.completed = True
-                self.score += 50
-                self.combo_count = 0
-                self.last_block_index = self.current_task.current_block_index
-                self.current_task.current_block_index += 1
-                
-                if self.current_task.current_block_index >= len(self.current_task.blocks):
-                    self.complete_task()
-                else:
-                    self.highlight_current_block()
-            
-            # 降低更新频率
-            if not hasattr(self, '_instruction_counter'):
-                self._instruction_counter = 0
-            self._instruction_counter += 1
-            if self._instruction_counter % 5 == 0:
-                self.update_step_instruction()
-    
     def update_stats(self):
-        """更新统计信息 + 累加注视时间（核心入口）"""
+        """更新统计信息（只负责UI显示，不再累加时间）"""
         if not self.current_task or not self.is_training:
             return
-        
-        # 关键：如果有保存的注视点，累加时间
-        if hasattr(self, 'last_gaze_x') and hasattr(self, 'last_gaze_y'):
-            if self.last_gaze_time > 0:
-                current_time = time.time()
-                dt = current_time - self.last_gaze_time
-                # 只要超过0.1秒就累加（兼容鼠标快速移动的情况）
-                if dt >= 0.1:
-                    self._check_and_accumulate_gaze(self.last_gaze_x, self.last_gaze_y, min(dt, 1.0))
-                    self.last_gaze_time = current_time
         
         elapsed = time.time() - self.current_task.start_time if self.current_task.start_time else 0
         
@@ -1036,7 +1111,7 @@ print(process_data(data))""",
                     break
     
     def complete_task(self):
-        """完成任务"""
+        """完成任务并自动保存到数据库"""
         self.is_training = False
         self.start_btn.setText("✅ 任务完成")
         
@@ -1045,6 +1120,21 @@ print(process_data(data))""",
         
         completion_rate = self.get_completion_rate()
         accuracy = (self.valid_fixations / max(1, self.total_fixations)) * 100
+        
+        # 1. 更新训练摘要记录到数据库
+        try:
+            if self.current_record_id:
+                self.db.update_training_record(
+                    record_id=self.current_record_id,
+                    completion_rate=completion_rate,
+                    total_time=elapsed,
+                    regression_count=self.regression_count,
+                    accuracy=accuracy,
+                    score=self.score
+                )
+                print(f"[数据库] 训练记录已更新，ID: {self.current_record_id}")
+        except Exception as e:
+            print(f"[数据库错误] 更新记录失败: {e}")
         
         message = (
             f"🎉 恭喜完成第 {self.current_task.level} 关!\n\n"

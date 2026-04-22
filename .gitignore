@@ -44,6 +44,9 @@ reports/
 *.jpeg
 *.log
 nul
+*.db
+check_db_users.py
+view_database.py
 
 # Nested git repository
 g3pylib/
