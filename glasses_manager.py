@@ -24,6 +24,12 @@ class GlassesManager(QObject):
         # 连接配置
         self.connection_mode = "zeroconf"  # "zeroconf" 或 "ip"
         self.device_ip = "192.168.75.51"  # 默认 IP 地址
+        self.debug_enabled = False
+
+    def _log(self, message, force=False):
+        """统一调试输出，避免流处理路径中散落 print"""
+        if force or self.debug_enabled:
+            print(message)
 
     def start_async_loop(self):
         """启动异步事件循环线程"""
@@ -71,12 +77,12 @@ class GlassesManager(QObject):
         """订阅场景视频和 Gaze 数据"""
         try:
             self.status_update.emit("正在启动视频流...")
-            print("[调试] 开始启动RTSP视频流...")
+            self._log("[调试] 开始启动RTSP视频流...")
             
             # 使用 RTSP 流(正确的方式)
             async with self.glasses.stream_rtsp(scene_camera=True, gaze=True) as streams:
                 self.status_update.emit("视频流已启动，正在接收数据...")
-                print("[调试] RTSP连接成功，开始接收数据流")
+                self._log("[调试] RTSP连接成功，开始接收数据流")
                 
                 async with streams.scene_camera.decode() as scene_stream, \
                            streams.gaze.decode() as gaze_stream:
@@ -90,7 +96,7 @@ class GlassesManager(QObject):
                         
                         frame_count += 1
                         if frame_count % 100 == 0:
-                            print(f"[调试] 已接收 {frame_count} 帧数据")
+                            self._log(f"[调试] 已接收 {frame_count} 帧数据")
                         
                         # 等待时间戳对齐
                         while gaze_timestamp is None or frame_timestamp is None:
@@ -121,11 +127,11 @@ class GlassesManager(QObject):
                         self.stream_data_ready.emit(frame_array, gaze_data)
                         
         except asyncio.CancelledError:
-            print("Streaming task cancelled")
+            self._log("Streaming task cancelled")
         except Exception as e:
             import traceback
             error_msg = f"数据流错误: {str(e)}"
-            print(error_msg)
+            self._log(error_msg, force=True)
             traceback.print_exc()
             
             # 发送错误信号，让UI显示友好提示

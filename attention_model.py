@@ -21,6 +21,11 @@ class AttentionEvaluator:
             {'name': 'Logic_Block_1', 'rect': (100, 200, 400, 300)}
         ]
 
+    def reset(self):
+        """重置当前训练会话的评估缓存"""
+        self.gaze_history.clear()
+        self.filtered_history.clear()
+
     def add_gaze_point(self, x, y, timestamp):
         """添加一个新的视线点（包含数据清洗）"""
         # 过滤无效数据（眨眼、追踪丢失）

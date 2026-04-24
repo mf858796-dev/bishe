@@ -15,9 +15,18 @@ class ReportGenerator:
         self.training_metrics = {}  # 存储训练指标
         self.start_time = None
         self.end_time = None
+        self.current_session_label = None
 
     def add_gaze_point(self, x, y):
         self.gaze_data.append((x, y))
+
+    def reset_session(self, session_label=None):
+        """重置当前训练会话的数据缓存"""
+        self.gaze_data = []
+        self.training_metrics = {}
+        self.start_time = None
+        self.end_time = None
+        self.current_session_label = session_label
     
     def set_metrics(self, metrics):
         """设置训练指标"""

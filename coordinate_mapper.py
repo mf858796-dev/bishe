@@ -41,6 +41,7 @@ class CoordinateMapper(QObject):
         
         # 调试计数器
         self._debug_counter = 0
+        self.debug_enabled = False
         
         # 定义 ArUco 字典 (4x4) - 兼容不同版本的 OpenCV
         try:
@@ -68,6 +69,17 @@ class CoordinateMapper(QObject):
             [screen_width, screen_height],
             [0, screen_height]
         ], dtype=np.float32)
+
+    def _log(self, message, force=False):
+        """统一调试输出，避免高频路径中散落 print"""
+        if force or self.debug_enabled:
+            print(message)
+
+    def _clip_to_screen(self, screen_x, screen_y):
+        """裁剪屏幕坐标到有效范围"""
+        clipped_x = max(0, min(self.screen_width, screen_x))
+        clipped_y = max(0, min(self.screen_height, screen_y))
+        return clipped_x, clipped_y
 
     def _init_kalman_filter(self):
         """初始化卡尔曼滤波器（优化参数，减少抖动）"""
@@ -98,10 +110,10 @@ class CoordinateMapper(QObject):
             # 估计误差协方差
             kalman.errorCovPost = np.eye(4, dtype=np.float32) * 0.5
             
-            print("[卡尔曼滤波] 参数已优化：processNoise=0.01, measurementNoise=0.1")
+            self._log("[卡尔曼滤波] 参数已优化：processNoise=0.01, measurementNoise=0.1")
             return kalman
         except Exception as e:
-            print(f"[卡尔曼滤波器] 初始化失败: {e}，将使用简单平滑")
+            self._log(f"[卡尔曼滤波器] 初始化失败: {e}，将使用简单平滑", force=True)
             return None
     
     def _smooth_gaze(self, u, v):
@@ -169,7 +181,7 @@ class CoordinateMapper(QObject):
                         # 调试输出
                         self._debug_counter += 1
                         if self._debug_counter % 50 == 0:
-                            print(f"[单应性映射] gaze({u:.3f}, {v:.3f}) -> screen({screen_x:.0f}, {screen_y:.0f})")
+                            self._log(f"[单应性映射] gaze({u:.3f}, {v:.3f}) -> screen({screen_x:.0f}, {screen_y:.0f})")
                         
                         # 检查是否在屏幕范围内
                         if 0 <= screen_x <= self.screen_width and 0 <= screen_y <= self.screen_height:
@@ -177,11 +189,12 @@ class CoordinateMapper(QObject):
                             return (screen_x, screen_y)
                         else:
                             # 坐标超出范围，裁剪到边界
-                            clipped_x = max(0, min(self.screen_width, screen_x))
-                            clipped_y = max(0, min(self.screen_height, screen_y))
+                            clipped_x, clipped_y = self._clip_to_screen(screen_x, screen_y)
                             
                             if self._debug_counter % 100 == 0:
-                                print(f"[映射警告] 单应性坐标超出范围 ({screen_x:.0f}, {screen_y:.0f})，已裁剪到 ({clipped_x:.0f}, {clipped_y:.0f})")
+                                self._log(
+                                    f"[映射警告] 单应性坐标超出范围 ({screen_x:.0f}, {screen_y:.0f})，已裁剪到 ({clipped_x:.0f}, {clipped_y:.0f})"
+                                )
                             
                             self.screen_gaze_update.emit(clipped_x, clipped_y)
                             return (clipped_x, clipped_y)
@@ -280,7 +293,9 @@ class CoordinateMapper(QObject):
                 # 调试输出：每100帧输出一次
                 self._debug_counter += 1
                 if self._debug_counter % 100 == 0:
-                    print(f"[映射调试] Raw({u:.3f}, {v:.3f}) -> Calib({calibrated_u:.3f}, {calibrated_v:.3f}) -> Screen({screen_x:.0f}, {screen_y:.0f}), Range: ({self.screen_width}x{self.screen_height})")
+                    self._log(
+                        f"[映射调试] Raw({u:.3f}, {v:.3f}) -> Calib({calibrated_u:.3f}, {calibrated_v:.3f}) -> Screen({screen_x:.0f}, {screen_y:.0f}), Range: ({self.screen_width}x{self.screen_height})"
+                    )
                 
                 # 检查是否在屏幕范围内
                 if 0 <= screen_x <= self.screen_width and 0 <= screen_y <= self.screen_height:
@@ -288,16 +303,17 @@ class CoordinateMapper(QObject):
                     return (screen_x, screen_y)
                 else:
                     # 坐标超出范围，裁剪到边界后仍然发送信号
-                    clipped_x = max(0, min(self.screen_width, screen_x))
-                    clipped_y = max(0, min(self.screen_height, screen_y))
+                    clipped_x, clipped_y = self._clip_to_screen(screen_x, screen_y)
                     
                     if self._debug_counter % 100 == 0:
-                        print(f"[映射警告] 坐标超出范围 ({screen_x:.0f}, {screen_y:.0f})，已裁剪到 ({clipped_x:.0f}, {clipped_y:.0f})")
+                        self._log(
+                            f"[映射警告] 坐标超出范围 ({screen_x:.0f}, {screen_y:.0f})，已裁剪到 ({clipped_x:.0f}, {clipped_y:.0f})"
+                        )
                     
                     self.screen_gaze_update.emit(clipped_x, clipped_y)
                     return (clipped_x, clipped_y)
             except Exception as e:
-                print(f"Gaze mapping error: {e}")
+                self._log(f"Gaze mapping error: {e}", force=True)
                 import traceback
                 traceback.print_exc()
         
@@ -324,7 +340,7 @@ class CoordinateMapper(QObject):
             src_points = np.array(src_points, dtype=np.float32)
             # 计算单应性矩阵
             self.homography_matrix, _ = cv2.findHomography(src_points, self.dst_points)
-            print("Homography matrix calculated successfully.")
+            self._log("Homography matrix calculated successfully.", force=True)
 
     def reset_mapping(self):
         """重置映射矩阵（例如当用户移动头部后）"""
@@ -344,8 +360,11 @@ class CoordinateMapper(QObject):
         self.calibration_scale_v = scale_v
         self.is_calibrated = True
         self.use_polynomial = False  # 使用线性校准
-        print(f"[校准] 参数已设置: offset_u={offset_u:.4f}, offset_v={offset_v:.4f}, "
-              f"scale_u={scale_u:.4f}, scale_v={scale_v:.4f}")
+        self._log(
+            f"[校准] 参数已设置: offset_u={offset_u:.4f}, offset_v={offset_v:.4f}, "
+            f"scale_u={scale_u:.4f}, scale_v={scale_v:.4f}",
+            force=True
+        )
     
     def set_polynomial_params(self, coeffs_u, coeffs_v, degree=2):
         """
@@ -366,9 +385,9 @@ class CoordinateMapper(QObject):
         self.kalman_v = None
         self.kalman_initialized = False
         
-        print(f"[校准] {degree}次多项式参数已设置")
-        print(f"  U方向系数数: {len(coeffs_u)}")
-        print(f"  V方向系数数: {len(coeffs_v)}")
+        self._log(f"[校准] {degree}次多项式参数已设置", force=True)
+        self._log(f"  U方向系数数: {len(coeffs_u)}", force=True)
+        self._log(f"  V方向系数数: {len(coeffs_v)}", force=True)
     
     def set_homography_matrix(self, H):
         """
@@ -385,8 +404,8 @@ class CoordinateMapper(QObject):
         self.kalman_v = None
         self.kalman_initialized = False
         
-        print(f"[校准] 单应性矩阵已设置")
-        print(f"  矩阵:\n{H}")
+        self._log(f"[校准] 单应性矩阵已设置", force=True)
+        self._log(f"  矩阵:\n{H}", force=True)
     
     def set_linear_params(self, scale_u, scale_v, offset_u, offset_v):
         """
@@ -409,9 +428,9 @@ class CoordinateMapper(QObject):
         self.kalman_v = None
         self.kalman_initialized = False
         
-        print(f"[校准] 线性参数已设置")
-        print(f"  scale_u={scale_u:.4f}, scale_v={scale_v:.4f}")
-        print(f"  offset_u={offset_u:.4f}, offset_v={offset_v:.4f}")
+        self._log(f"[校准] 线性参数已设置", force=True)
+        self._log(f"  scale_u={scale_u:.4f}, scale_v={scale_v:.4f}", force=True)
+        self._log(f"  offset_u={offset_u:.4f}, offset_v={offset_v:.4f}", force=True)
     
     def reset_calibration(self):
         """重置校准参数"""
@@ -434,7 +453,7 @@ class CoordinateMapper(QObject):
             del self._smooth_u
             del self._smooth_v
         
-        print("[校准] 参数已重置")
+        self._log("[校准] 参数已重置", force=True)
     
     def get_calibration_params(self):
         """

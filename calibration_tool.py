@@ -26,40 +26,88 @@ class CalibrationWidget(QWidget):
         ]
         
         self.init_ui()
+
+    def _button_style(self, start_color, end_color=None):
+        end_color = end_color or start_color
+        return f"""
+            QPushButton {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {start_color}, stop:1 {end_color});
+                color: white;
+                border: none;
+                border-radius: 14px;
+                padding: 12px 20px;
+                font-size: 14px;
+                font-weight: 700;
+                min-height: 48px;
+            }}
+            QPushButton:hover {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {end_color}, stop:1 {start_color});
+            }}
+            QPushButton:pressed {{
+                padding-top: 13px;
+            }}
+        """
         
     def init_ui(self):
         """初始化UI"""
         self.setWindowTitle("眼动仪屏幕校准")
         self.showFullScreen()
-        self.setStyleSheet("background-color: white;")
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #f8fafc;
+                color: #0f172a;
+            }
+            QLabel {
+                background: transparent;
+            }
+        """)
         
         # 提示标签
         self.hint_label = QLabel("请注视红点，按空格键记录数据")
         self.hint_label.setAlignment(Qt.AlignCenter)
-        self.hint_label.setFont(QFont("Arial", 16))
-        self.hint_label.setStyleSheet("color: #333; padding: 20px;")
+        self.hint_label.setFont(QFont("Microsoft YaHei", 18, QFont.Bold))
+        self.hint_label.setStyleSheet("""
+            color: #0f172a;
+            padding: 18px 24px;
+            background-color: rgba(255, 255, 255, 0.92);
+            border: 1px solid #dbe4f0;
+            border-radius: 18px;
+        """)
         
         # 进度标签
         self.progress_label = QLabel(f"校准进度: 0/{len(self.points)}")
         self.progress_label.setAlignment(Qt.AlignCenter)
-        self.progress_label.setFont(QFont("Arial", 14))
+        self.progress_label.setFont(QFont("Microsoft YaHei", 14, QFont.Bold))
+        self.progress_label.setStyleSheet("""
+            color: #475569;
+            padding: 12px 18px;
+            background-color: rgba(255, 255, 255, 0.92);
+            border: 1px solid #dbe4f0;
+            border-radius: 14px;
+        """)
         
         # 按钮布局
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(16)
         
         self.record_btn = QPushButton("记录当前点 (空格键)")
-        self.record_btn.setFont(QFont("Arial", 12))
+        self.record_btn.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
         self.record_btn.setFixedHeight(50)
+        self.record_btn.setStyleSheet(self._button_style("#2563eb", "#6366f1"))
         self.record_btn.clicked.connect(self.record_current_point)
         
         self.skip_btn = QPushButton("跳过")
-        self.skip_btn.setFont(QFont("Arial", 12))
+        self.skip_btn.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
         self.skip_btn.setFixedHeight(50)
+        self.skip_btn.setStyleSheet(self._button_style("#f59e0b", "#fb7185"))
         self.skip_btn.clicked.connect(self.skip_current_point)
         
         self.cancel_btn = QPushButton("取消校准")
-        self.cancel_btn.setFont(QFont("Arial", 12))
+        self.cancel_btn.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
         self.cancel_btn.setFixedHeight(50)
+        self.cancel_btn.setStyleSheet(self._button_style("#64748b", "#475569"))
         self.cancel_btn.clicked.connect(self.close)
         
         btn_layout.addWidget(self.record_btn)
@@ -68,11 +116,12 @@ class CalibrationWidget(QWidget):
         
         # 主布局
         layout = QVBoxLayout()
+        layout.setSpacing(20)
         layout.addWidget(self.hint_label)
         layout.addStretch()
         layout.addWidget(self.progress_label)
         layout.addLayout(btn_layout)
-        layout.setContentsMargins(50, 50, 50, 50)
+        layout.setContentsMargins(56, 40, 56, 48)
         
         self.setLayout(layout)
         

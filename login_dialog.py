@@ -14,80 +14,148 @@ class LoginDialog(QDialog):
 
     def init_ui(self):
         self.setWindowTitle("👁️ 眼动训练系统")
-        self.setFixedSize(560, 540)
+        self.setFixedSize(680, 620)
+        
+        # 高级现代 UI 样式 - 完全独立，不受全局 QSS 影响
         self.setStyleSheet("""
             QDialog {
-                background-color: #f0f2f5;
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #2563eb, stop:0.45 #6366f1, stop:1 #a855f7
+                );
             }
             QTabWidget::pane {
-                border: none;
-                background: white;
-                border-radius: 12px;
+                border: 1px solid rgba(255, 255, 255, 0.14);
+                background: rgba(255, 255, 255, 0.96);
+                border-radius: 22px;
+                margin-top: 0px;
+            }
+            QTabBar {
+                qproperty-drawBase: 0;
+                background: transparent;
             }
             QTabBar::tab {
                 background: transparent;
-                color: #6b7280;
-                padding: 16px 36px;
-                font-size: 17px;
-                font-weight: bold;
-                min-width: 130px;
+                color: rgba(255, 255, 255, 0.72);
+                padding: 16px 42px;
+                font-size: 16px;
+                font-weight: 600;
+                min-width: 180px;
+                border: none;
+                border-bottom: 3px solid transparent;
+                margin-right: 0px;
             }
             QTabBar::tab:selected {
-                color: #3b82f6;
-                border-bottom: 3px solid #3b82f6;
+                color: white;
+                font-weight: 700;
+                border-bottom: 3px solid white;
+                background: rgba(255, 255, 255, 0.12);
+            }
+            QTabBar::tab:hover:!selected {
+                color: rgba(255, 255, 255, 0.92);
             }
             QLineEdit {
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-                padding: 16px 18px;
-                background: #f9fafb;
-                font-size: 15px;
+                border: 1px solid #dbe4f0;
+                border-radius: 14px;
+                padding: 13px 16px;
+                background: #f8fafc;
+                font-size: 14px;
                 min-height: 48px;
+                color: #1e293b;
             }
             QLineEdit:focus {
-                border: 1px solid #3b82f6;
+                border: 1px solid #6366f1;
                 background: white;
             }
+            QLineEdit:hover {
+                border: 1px solid #b8c4d4;
+            }
             QPushButton {
-                border-radius: 8px;
+                border-radius: 14px;
                 color: white;
-                font-weight: bold;
+                font-weight: 700;
                 padding: 14px;
                 font-size: 16px;
+                border: none;
+                min-height: 50px;
             }
             QPushButton#LoginBtn {
-                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #2563eb);
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #2563eb, stop:1 #8b5cf6
+                );
+            }
+            QPushButton#LoginBtn:hover {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #1d4ed8, stop:1 #7c3aed
+                );
+            }
+            QPushButton#LoginBtn:pressed {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #1e40af, stop:1 #6d28d9
+                );
             }
             QPushButton#RegBtn {
-                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10b981, stop:1 #059669);
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #10b981, stop:1 #06b6d4
+                );
             }
-            QPushButton:hover {
-                opacity: 0.9;
+            QPushButton#RegBtn:hover {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #059669, stop:1 #0891b2
+                );
+            }
+            QPushButton#RegBtn:pressed {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #047857, stop:1 #0e7490
+                );
             }
             QLabel.title {
-                color: #1f2937;
-                font-size: 20px;
-                font-weight: bold;
-                margin-bottom: 24px;
+                color: white;
+                font-size: 34px;
+                font-weight: 800;
+                qproperty-alignment: AlignCenter;
+            }
+            QLabel.subtitle {
+                color: rgba(255, 255, 255, 0.92);
+                font-size: 15px;
+                qproperty-alignment: AlignCenter;
             }
             QLabel.field {
-                color: #374151;
+                color: #475569;
                 font-size: 14px;
-                font-weight: bold;
-                margin-top: 16px;
-                margin-bottom: 6px;
+                font-weight: 600;
+                margin-bottom: 8px;
             }
         """)
         
         layout = QVBoxLayout()
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
-        # 标题区域
-        title_label = QLabel("欢迎使用专注力训练系统")
+        # 标题区域 - 透明背景
+        header_widget = QWidget()
+        header_widget.setStyleSheet("background: transparent;")
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.setContentsMargins(48, 42, 48, 26)
+        header_layout.setSpacing(10)
+        
+        title_label = QLabel("👁️ 眼动训练系统")
         title_label.setProperty("class", "title")
         title_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title_label)
+        header_layout.addWidget(title_label)
+        
+        subtitle_label = QLabel("代码阅读训练 · 实时反馈 · 数据记录")
+        subtitle_label.setProperty("class", "subtitle")
+        subtitle_label.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(subtitle_label)
+        
+        layout.addWidget(header_widget)
         
         # 使用 Tab 切换登录和注册
         self.tabs = QTabWidget()
@@ -96,8 +164,8 @@ class LoginDialog(QDialog):
         # --- 登录标签页 ---
         login_tab = QWidget()
         login_layout = QVBoxLayout(login_tab)
-        login_layout.setContentsMargins(50, 40, 50, 40)
-        login_layout.setSpacing(0)
+        login_layout.setContentsMargins(44, 34, 44, 34)
+        login_layout.setSpacing(10)
         
         self.login_user = QLineEdit()
         self.login_user.setPlaceholderText("请输入用户名")
@@ -111,22 +179,23 @@ class LoginDialog(QDialog):
         
         login_layout.addStretch()
         lbl_user = QLabel("用户名")
-        lbl_user.setProperty("class", "field")
+        lbl_user.setStyleSheet("font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 4px;")
         login_layout.addWidget(lbl_user)
         login_layout.addWidget(self.login_user)
         lbl_pass = QLabel("密码")
-        lbl_pass.setProperty("class", "field")
+        lbl_pass.setStyleSheet("font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 4px;")
         login_layout.addWidget(lbl_pass)
         login_layout.addWidget(self.login_pass)
-        login_layout.addSpacing(24)
+        login_layout.addSpacing(18)
         login_layout.addWidget(login_btn)
         login_layout.addStretch()
         
         # --- 注册标签页 ---
         register_tab = QWidget()
+        register_tab.setStyleSheet("background: transparent;")
         register_layout = QVBoxLayout(register_tab)
-        register_layout.setContentsMargins(50, 40, 50, 40)
-        register_layout.setSpacing(0)
+        register_layout.setContentsMargins(44, 28, 44, 36)
+        register_layout.setSpacing(10)
         
         self.reg_user = QLineEdit()
         self.reg_user.setPlaceholderText("设置用户名")
@@ -153,7 +222,7 @@ class LoginDialog(QDialog):
         lbl_reg_sid.setProperty("class", "field")
         register_layout.addWidget(lbl_reg_sid)
         register_layout.addWidget(self.reg_sid)
-        register_layout.addSpacing(24)
+        register_layout.addSpacing(18)
         register_layout.addWidget(reg_btn)
         register_layout.addStretch()
         
